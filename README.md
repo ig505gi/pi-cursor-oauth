@@ -31,6 +31,7 @@ Supported exec calls:
 Bridge behavior notes:
 - exec streams are now explicitly closed after tool completion so Cursor does not stay stuck on `working...`
 - unsupported interaction queries from Cursor are answered immediately instead of being left pending
+- Cursor exec activity is mirrored into a small pi TUI widget so tool runs are visible without injecting extra conversation messages
 
 Current limitations:
 - binary `write` via raw bytes is not supported yet
@@ -96,3 +97,6 @@ Then select a Cursor model with `/model`.
 - `src/cursor-provider.ts` - Cursor chat transport implementation
 - `src/cursor-exec-bridge.ts` - Cursor exec dispatch and result mapping
 - `src/cursor-gen/agent_pb.ts` - generated protobuf bindings used by the Cursor API
+
+This project is actively maintained.
+It is intended to make Cursor integration with pi straightforward.
