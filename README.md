@@ -1,9 +1,9 @@
 # pi-cursor-oauth
 
-A pi extension that adds Cursor OAuth login and a Cursor-backed model provider.
+> [!WARNING]
+> This project is vibe coded and pure slop.
 
-Location:
-- `/Users/kenryu/Developer/420024-lab/pi-cursor-oauth`
+A pi extension that adds Cursor OAuth login and a Cursor-backed model provider.
 
 ## What it does
 
@@ -39,28 +39,14 @@ Current limitations:
 
 ## Usage
 
-### 1. Install dependencies
+### 1. Installation
 
 ```bash
-cd /Users/kenryu/Developer/420024-lab/pi-cursor-oauth
-npm install
+pi install git:https://github.com/kenryu42/pi-cursor-oauth
 ```
 
-### 2. Load the extension
-
-Temporary:
-
-```bash
-pi -e /Users/kenryu/Developer/420024-lab/pi-cursor-oauth
 ```
-
-Or install as a local package:
-
-```bash
-pi install /Users/kenryu/Developer/420024-lab/pi-cursor-oauth
-```
-
-### 3. Authenticate
+### 2. Authenticate
 
 Inside pi:
 
@@ -74,7 +60,7 @@ Or provide an environment variable:
 export CURSOR_ACCESS_TOKEN=...
 ```
 
-### 4. Refresh models
+### 3. Refresh models
 
 Inside pi:
 
@@ -98,5 +84,3 @@ Then select a Cursor model with `/model`.
 - `src/cursor-exec-bridge.ts` - Cursor exec dispatch and result mapping
 - `src/cursor-gen/agent_pb.ts` - generated protobuf bindings used by the Cursor API
 
-This project is actively maintained.
-It is intended to make Cursor integration with pi straightforward.
