@@ -1,0 +1,23 @@
+{
+  "name": "pi-cursor-oauth",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "keywords": ["pi-package"],
+  "peerDependencies": {
+    "@mariozechner/pi-ai": "*",
+    "@mariozechner/pi-coding-agent": "*"
+  },
+  "dependencies": {
+    "@bufbuild/protobuf": "^2.10.2"
+  },
+  "pi": {
+    "extensions": ["./src/index.ts"]
+  },
+  "devDependencies": {
+    "biomejs": "^0.0.0",
+    "husky": "^9.1.7",
+    "knip": "^5.88.1",
+    "lint-staged": "^16.4.0"
+  }
+}
