@@ -1,7 +1,7 @@
 # pi-cursor-oauth
 
 > [!WARNING]
-> This project is vibe coded and pure slop.
+> This extension is vibe coded by ~~copying~~ referencing [oh-my-pi](https://github.com/can1357/oh-my-pi) implementation.
 
 A pi extension that adds Cursor OAuth login and a Cursor-backed model provider.
 
