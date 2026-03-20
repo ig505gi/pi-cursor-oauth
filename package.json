@@ -39,6 +39,9 @@
 		"exclude": [
 			"exports",
 			"types"
+		],
+		"ignore": [
+			"pi-cursor-provider/**"
 		]
 	},
 	"keywords": [
