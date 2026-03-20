@@ -21,28 +21,52 @@ const http2Scenario: {
 	body: Uint8Array | null;
 	requestError: Error | null;
 	clientError: Error | null;
+	stallRequest: boolean;
+	baseUrls: string[];
+	requestHeaders: Record<string, string>[];
+	requestBodies: Uint8Array[];
+	clients: Array<{
+		close: ReturnType<typeof mock>;
+		destroy: ReturnType<typeof mock>;
+	}>;
 } = {
 	status: 200,
 	body: null,
 	requestError: null,
 	clientError: null,
+	stallRequest: false,
+	baseUrls: [],
+	requestHeaders: [],
+	requestBodies: [],
+	clients: [],
 };
 
 mock.module("node:http2", () => ({
-	connect: mock(() => {
+	connect: mock((baseUrl: string) => {
 		const client = new EventEmitter() as EventEmitter & {
 			close: ReturnType<typeof mock>;
 			destroy: ReturnType<typeof mock>;
-			request: () => EventEmitter & { end: (body?: Buffer) => void };
+			request: (
+				headers: Record<string, string>,
+			) => EventEmitter & { end: (body?: Buffer) => void };
 		};
+		http2Scenario.baseUrls.push(baseUrl);
 		client.close = mock(() => {});
 		client.destroy = mock(() => {});
-		client.request = () => {
+		http2Scenario.clients.push(client);
+		client.request = (headers) => {
+			http2Scenario.requestHeaders.push(headers);
 			const request = new EventEmitter() as EventEmitter & {
 				end: (body?: Buffer) => void;
 			};
-			request.end = () => {
+			request.end = (body) => {
+				if (body) {
+					http2Scenario.requestBodies.push(new Uint8Array(body));
+				}
 				queueMicrotask(() => {
+					if (http2Scenario.stallRequest) {
+						return;
+					}
 					if (http2Scenario.clientError) {
 						client.emit("error", http2Scenario.clientError);
 						return;
@@ -72,6 +96,11 @@ describe("cursor-models", () => {
 		http2Scenario.body = null;
 		http2Scenario.requestError = null;
 		http2Scenario.clientError = null;
+		http2Scenario.stallRequest = false;
+		http2Scenario.baseUrls = [];
+		http2Scenario.requestHeaders = [];
+		http2Scenario.requestBodies = [];
+		http2Scenario.clients = [];
 	});
 
 	afterEach(() => {
@@ -209,5 +238,69 @@ describe("cursor-models", () => {
 				timeoutMs: 10,
 			}),
 		).resolves.toBe(null);
+	});
+
+	test("fetchCursorUsableModels trims the base URL and sends the expected request headers", async () => {
+		const { fetchCursorUsableModels } = await import("../src/cursor-models");
+		http2Scenario.body = frameConnectMessage(
+			toBinary(
+				GetUsableModelsResponseSchema,
+				create(GetUsableModelsResponseSchema, {
+					models: [{ modelId: "default", displayName: "Cursor Auto" }] as any,
+				}),
+			),
+		);
+
+		await expect(
+			fetchCursorUsableModels({
+				apiKey: "token",
+				baseUrl: "https://cursor.example///",
+				clientVersion: "cli-test-version",
+				timeoutMs: 10,
+			}),
+		).resolves.toMatchObject([expect.objectContaining({ id: "default" })]);
+
+		expect(http2Scenario.baseUrls).toEqual(["https://cursor.example"]);
+		expect(http2Scenario.requestHeaders).toEqual([
+			expect.objectContaining({
+				":method": "POST",
+				":path": "/agent.v1.AgentService/GetUsableModels",
+				authorization: "Bearer token",
+				"content-type": "application/proto",
+				te: "trailers",
+				"x-cursor-client-type": "cli",
+				"x-cursor-client-version": "cli-test-version",
+				"x-ghost-mode": "true",
+			}),
+		]);
+		expect(http2Scenario.requestBodies).toEqual([]);
+	});
+
+	test("fetchCursorUsableModels returns null when the HTTP/2 client errors", async () => {
+		const { fetchCursorUsableModels } = await import("../src/cursor-models");
+		http2Scenario.clientError = new Error("client failed");
+
+		await expect(
+			fetchCursorUsableModels({
+				apiKey: "token",
+				timeoutMs: 10,
+			}),
+		).resolves.toBe(null);
+	});
+
+	test("fetchCursorUsableModels returns null and destroys the client when the request times out", async () => {
+		const { fetchCursorUsableModels } = await import("../src/cursor-models");
+		http2Scenario.stallRequest = true;
+
+		await expect(
+			fetchCursorUsableModels({
+				apiKey: "token",
+				timeoutMs: 1,
+			}),
+		).resolves.toBe(null);
+
+		expect(http2Scenario.clients).toHaveLength(1);
+		expect(http2Scenario.clients[0].destroy).toHaveBeenCalledTimes(1);
+		expect(http2Scenario.clients[0].close).not.toHaveBeenCalled();
 	});
 });
