@@ -18,7 +18,7 @@
 	"scripts": {
 		"build": "bun run clean && bun build src/index.ts --outdir dist --target node --format esm --external @bufbuild/protobuf --external @mariozechner/pi-ai --external @mariozechner/pi-coding-agent && tsc -p tsconfig.build.json",
 		"build:types": "tsc -p tsconfig.build.json",
-		"clean": "rm -rf dist",
+		"clean": "rm -rf dist *.tgz",
 		"check": "bun run lint && bun run typecheck && bun run knip",
 		"lint": "biome check --write",
 		"lint:ci": "biome ci .",
