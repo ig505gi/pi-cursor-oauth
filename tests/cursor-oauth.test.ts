@@ -17,12 +17,18 @@ import {
 	refreshCursorToken,
 } from "../src/cursor-oauth";
 
-function createJwt(exp: number): string {
+function createToken(payload: Record<string, unknown>): string {
 	const header = Buffer.from(
 		JSON.stringify({ alg: "none", typ: "JWT" }),
 	).toString("base64url");
-	const payload = Buffer.from(JSON.stringify({ exp })).toString("base64url");
-	return `${header}.${payload}.signature`;
+	const encodedPayload = Buffer.from(JSON.stringify(payload)).toString(
+		"base64url",
+	);
+	return `${header}.${encodedPayload}.signature`;
+}
+
+function createJwt(exp: number): string {
+	return createToken({ exp });
 }
 
 describe("cursor-oauth", () => {
@@ -112,6 +118,22 @@ describe("cursor-oauth", () => {
 		);
 	});
 
+	test("pollCursorAuth treats repeated non-404 HTTP failures as consecutive errors", async () => {
+		const runtime: CursorAuthRuntime = {
+			sleep: async () => {},
+			fetch: (async () =>
+				new Response("server error", {
+					status: 500,
+				})) as unknown as typeof fetch,
+		};
+
+		await expect(
+			pollCursorAuth("uuid", "verifier", undefined, runtime),
+		).rejects.toThrow(
+			"Too many consecutive errors during Cursor auth polling: Poll failed: 500",
+		);
+	});
+
 	test("pollCursorAuth throws on timeout and abort", async () => {
 		const runtime: CursorAuthRuntime = {
 			sleep: async () => {},
@@ -127,6 +149,53 @@ describe("cursor-oauth", () => {
 		await expect(
 			pollCursorAuth("uuid", "verifier", controller.signal, runtime),
 		).rejects.toThrow("Cursor authentication cancelled");
+	});
+
+	test("pollCursorAuth throws cancellation when aborted after sleep and before failed fetch handling", async () => {
+		const controller = new AbortController();
+		const runtime: CursorAuthRuntime = {
+			sleep: async () => {
+				controller.abort();
+			},
+			fetch: (async () => {
+				throw new Error("request aborted");
+			}) as unknown as typeof fetch,
+		};
+
+		await expect(
+			pollCursorAuth("uuid", "verifier", controller.signal, runtime),
+		).rejects.toThrow("Cursor authentication cancelled");
+	});
+
+	test("pollCursorAuth uses the default sleep runtime before a successful poll", async () => {
+		const fetchSpy = spyOn(globalThis, "fetch").mockResolvedValue(
+			new Response(
+				JSON.stringify({
+					accessToken: "access-token",
+					refreshToken: "refresh-token",
+				}),
+			),
+		);
+
+		await expect(pollCursorAuth("uuid", "verifier")).resolves.toEqual({
+			accessToken: "access-token",
+			refreshToken: "refresh-token",
+		});
+		expect(fetchSpy).toHaveBeenCalledTimes(1);
+	});
+
+	test("pollCursorAuth aborts during the default sleep runtime before fetch is called", async () => {
+		const controller = new AbortController();
+		const fetchSpy = spyOn(globalThis, "fetch");
+
+		queueMicrotask(() => {
+			controller.abort();
+		});
+
+		await expect(
+			pollCursorAuth("uuid", "verifier", controller.signal),
+		).rejects.toThrow("Cursor authentication cancelled");
+		expect(fetchSpy).not.toHaveBeenCalled();
 	});
 
 	test("loginCursor emits callbacks and maps Cursor tokens into OAuth credentials", async () => {
@@ -161,6 +230,36 @@ describe("cursor-oauth", () => {
 		expect(credentials.refresh).toBe("refresh-token");
 		expect(credentials.access).toContain(".");
 		expect(credentials.expires).toBe(1_900_000_000_000 - 5 * 60 * 1000);
+	});
+
+	test("loginCursor falls back to a conservative expiry for non-JWT access tokens", async () => {
+		setSystemTime(new Date("2026-03-20T00:00:00Z"));
+		const runtime: CursorAuthRuntime = {
+			sleep: async () => {},
+			fetch: (async () =>
+				new Response(
+					JSON.stringify({
+						accessToken: "plain-access-token",
+						refreshToken: "refresh-token",
+					}),
+				)) as unknown as typeof fetch,
+		};
+
+		const credentials = await loginCursor(
+			{
+				onAuth: mock(() => {}),
+				onProgress: mock(() => {}),
+				onPrompt: mock(async () => ""),
+				signal: undefined,
+			},
+			runtime,
+		);
+
+		expect(credentials).toMatchObject({
+			access: "plain-access-token",
+			refresh: "refresh-token",
+			expires: Date.parse("2026-03-20T01:00:00Z"),
+		});
 	});
 
 	test("refreshCursorToken uses refresh token when present and surfaces failure text", async () => {
@@ -202,6 +301,78 @@ describe("cursor-oauth", () => {
 			headers: expect.objectContaining({
 				Authorization: "Bearer access-token",
 			}),
+		});
+	});
+
+	test("refreshCursorToken falls back to the current bearer when Cursor omits a new refresh token", async () => {
+		const fetchSpy = spyOn(globalThis, "fetch").mockResolvedValue(
+			new Response(
+				JSON.stringify({
+					accessToken: createJwt(1_850_000_000),
+					refreshToken: "",
+				}),
+			),
+		);
+
+		await expect(
+			refreshCursorToken({
+				access: "access-token",
+				refresh: "refresh-token",
+				expires: Date.now() + 60_000,
+			}),
+		).resolves.toMatchObject({
+			access: expect.stringContaining("."),
+			refresh: "refresh-token",
+		});
+		expect(fetchSpy).toHaveBeenCalledWith(
+			"https://api2.cursor.sh/auth/exchange_user_api_key",
+			expect.objectContaining({
+				headers: expect.objectContaining({
+					Authorization: "Bearer refresh-token",
+				}),
+			}),
+		);
+	});
+
+	test("refreshCursorToken falls back to a conservative expiry when the new access token has no exp or is malformed", async () => {
+		setSystemTime(new Date("2026-03-20T00:00:00Z"));
+		spyOn(globalThis, "fetch")
+			.mockResolvedValueOnce(
+				new Response(
+					JSON.stringify({
+						accessToken: createToken({}),
+						refreshToken: "new-refresh-token",
+					}),
+				),
+			)
+			.mockResolvedValueOnce(
+				new Response(
+					JSON.stringify({
+						accessToken: "header.not-json.signature",
+						refreshToken: "",
+					}),
+				),
+			);
+
+		await expect(
+			refreshCursorToken({
+				access: "access-token",
+				refresh: "refresh-token",
+				expires: Date.now() + 60_000,
+			}),
+		).resolves.toMatchObject({
+			refresh: "new-refresh-token",
+			expires: Date.parse("2026-03-20T01:00:00Z"),
+		});
+		await expect(
+			refreshCursorToken({
+				access: "access-token",
+				refresh: "",
+				expires: Date.now() + 60_000,
+			}),
+		).resolves.toMatchObject({
+			refresh: "access-token",
+			expires: Date.parse("2026-03-20T01:00:00Z"),
 		});
 	});
 
