@@ -15,6 +15,10 @@ import {
 	type ToolResultMessage,
 } from "@mariozechner/pi-ai";
 import {
+	handleExecServerControlMessage,
+	handleExecServerMessage,
+} from "./cursor-exec-bridge";
+import {
 	AgentClientMessageSchema,
 	AgentConversationTurnStructureSchema,
 	AgentRunRequestSchema,
@@ -26,17 +30,17 @@ import {
 	AssistantMessageSchema,
 	ClientHeartbeatSchema,
 	ConversationActionSchema,
-	CreatePlanErrorSchema,
-	CreatePlanRequestResponseSchema,
-	CreatePlanResultSchema,
 	type ConversationStateStructure,
 	ConversationStateStructureSchema,
 	ConversationStepSchema,
 	ConversationTurnStructureSchema,
-	ExaFetchRequestResponseSchema,
+	CreatePlanErrorSchema,
+	CreatePlanRequestResponseSchema,
+	CreatePlanResultSchema,
 	ExaFetchRequestResponse_RejectedSchema,
-	ExaSearchRequestResponseSchema,
+	ExaFetchRequestResponseSchema,
 	ExaSearchRequestResponse_RejectedSchema,
+	ExaSearchRequestResponseSchema,
 	GetBlobResultSchema,
 	InteractionResponseSchema,
 	KvClientMessageSchema,
@@ -44,14 +48,13 @@ import {
 	SetBlobResultSchema,
 	SetupVmEnvironmentResultSchema,
 	SetupVmEnvironmentSuccessSchema,
-	SwitchModeRequestResponseSchema,
 	SwitchModeRequestResponse_RejectedSchema,
+	SwitchModeRequestResponseSchema,
 	UserMessageActionSchema,
 	UserMessageSchema,
-	WebSearchRequestResponseSchema,
 	WebSearchRequestResponse_RejectedSchema,
+	WebSearchRequestResponseSchema,
 } from "./cursor-gen/agent_pb";
-import { handleExecServerControlMessage, handleExecServerMessage } from "./cursor-exec-bridge";
 
 export const CURSOR_API_URL = "https://api2.cursor.sh";
 export const CURSOR_CLIENT_VERSION = "cli-2026.01.09-231024f";
@@ -67,7 +70,9 @@ interface BlockState {
 	currentThinkingBlock: (ThinkingContent & { index: number }) | null;
 	firstTokenTime: number | undefined;
 	setTextBlock: (block: (TextContent & { index: number }) | null) => void;
-	setThinkingBlock: (block: (ThinkingContent & { index: number }) | null) => void;
+	setThinkingBlock: (
+		block: (ThinkingContent & { index: number }) | null,
+	) => void;
 	setFirstTokenTime: () => void;
 }
 
@@ -115,17 +120,25 @@ export function streamCursorChat(
 		try {
 			const apiKey = options?.apiKey;
 			if (!apiKey) {
-				throw new Error("Cursor API key (access token) is required. Run /login cursor.");
+				throw new Error(
+					"Cursor API key (access token) is required. Run /login cursor.",
+				);
 			}
 
-			const blobStore = conversationBlobStores.get(currentConversationId) ?? new Map<string, Uint8Array>();
+			const blobStore =
+				conversationBlobStores.get(currentConversationId) ??
+				new Map<string, Uint8Array>();
 			conversationBlobStores.set(currentConversationId, blobStore);
 			const cachedState = conversationStateCache.get(currentConversationId);
-			const { requestBytes, conversationState } = buildGrpcRequest(model, context, {
-				conversationId: currentConversationId,
-				blobStore,
-				conversationState: cachedState,
-			});
+			const { requestBytes, conversationState } = buildGrpcRequest(
+				model,
+				context,
+				{
+					conversationId: currentConversationId,
+					blobStore,
+					conversationState: cachedState,
+				},
+			);
 			conversationStateCache.set(currentConversationId, conversationState);
 
 			h2Client = http2.connect(model.baseUrl || CURSOR_API_URL);
@@ -147,7 +160,8 @@ export function streamCursorChat(
 			let pendingBuffer = Buffer.alloc(0);
 			let endStreamError: Error | null = null;
 			let currentTextBlock: (TextContent & { index: number }) | null = null;
-			let currentThinkingBlock: (ThinkingContent & { index: number }) | null = null;
+			let currentThinkingBlock: (ThinkingContent & { index: number }) | null =
+				null;
 			const usageState: UsageState = { sawTokenDelta: false };
 
 			const state: BlockState = {
@@ -173,7 +187,9 @@ export function streamCursorChat(
 				},
 			};
 
-			const onConversationCheckpoint = (checkpoint: ConversationStateStructure) => {
+			const onConversationCheckpoint = (
+				checkpoint: ConversationStateStructure,
+			) => {
 				conversationStateCache.set(currentConversationId, checkpoint);
 			};
 
@@ -200,7 +216,10 @@ export function streamCursorChat(
 					}
 
 					try {
-						const serverMessage = fromBinary(AgentServerMessageSchema, messageBytes);
+						const serverMessage = fromBinary(
+							AgentServerMessageSchema,
+							messageBytes,
+						);
 						void handleServerMessage(
 							serverMessage,
 							output,
@@ -226,9 +245,16 @@ export function streamCursorChat(
 					return;
 				}
 				const heartbeatMessage = create(AgentClientMessageSchema, {
-					message: { case: "clientHeartbeat", value: create(ClientHeartbeatSchema, {}) },
+					message: {
+						case: "clientHeartbeat",
+						value: create(ClientHeartbeatSchema, {}),
+					},
 				});
-				h2Request.write(frameConnectMessage(toBinary(AgentClientMessageSchema, heartbeatMessage)));
+				h2Request.write(
+					frameConnectMessage(
+						toBinary(AgentClientMessageSchema, heartbeatMessage),
+					),
+				);
 			};
 			heartbeatTimer = setInterval(sendHeartbeat, 5000);
 
@@ -237,7 +263,11 @@ export function streamCursorChat(
 				const status = trailers["grpc-status"];
 				const message = trailers["grpc-message"];
 				if (status && status !== "0") {
-					reject(new Error(`gRPC error ${status}: ${decodeURIComponent(String(message || ""))}`));
+					reject(
+						new Error(
+							`gRPC error ${status}: ${decodeURIComponent(String(message || ""))}`,
+						),
+					);
 				}
 			});
 			h2Request.on("end", () => {
@@ -281,11 +311,16 @@ export function streamCursorChat(
 			}
 
 			calculateCost(model, output.usage);
-			stream.push({ type: "done", reason: output.stopReason as "stop" | "length" | "toolUse", message: output });
+			stream.push({
+				type: "done",
+				reason: output.stopReason as "stop" | "length" | "toolUse",
+				message: output,
+			});
 			stream.end();
 		} catch (error) {
 			output.stopReason = options?.signal?.aborted ? "aborted" : "error";
-			output.errorMessage = error instanceof Error ? error.message : String(error);
+			output.errorMessage =
+				error instanceof Error ? error.message : String(error);
 			stream.push({ type: "error", reason: output.stopReason, error: output });
 			stream.end();
 		} finally {
@@ -312,7 +347,13 @@ async function handleServerMessage(
 ): Promise<void> {
 	const msgCase = msg.message.case;
 	if (msgCase === "interactionUpdate") {
-		processInteractionUpdate(msg.message.value, output, stream, state, usageState);
+		processInteractionUpdate(
+			msg.message.value,
+			output,
+			stream,
+			state,
+			usageState,
+		);
 		return;
 	}
 	if (msgCase === "kvServerMessage") {
@@ -332,7 +373,12 @@ async function handleServerMessage(
 		return;
 	}
 	if (msgCase === "conversationCheckpointUpdate") {
-		handleConversationCheckpointUpdate(msg.message.value, output, usageState, onConversationCheckpoint);
+		handleConversationCheckpointUpdate(
+			msg.message.value,
+			output,
+			usageState,
+			onConversationCheckpoint,
+		);
 	}
 }
 
@@ -341,7 +387,8 @@ function handleInteractionQuery(
 	h2Request: http2.ClientHttp2Stream,
 ): void {
 	const queryCase = query.query?.case;
-	const reason = "This Cursor interaction query is not supported by the pi-cursor-oauth bridge.";
+	const reason =
+		"This Cursor interaction query is not supported by the pi-cursor-oauth bridge.";
 	let resultCase: string;
 	let resultValue: unknown;
 
@@ -401,7 +448,10 @@ function handleInteractionQuery(
 	} else if (queryCase === "setupVmEnvironmentArgs") {
 		resultCase = "setupVmEnvironmentResult";
 		resultValue = create(SetupVmEnvironmentResultSchema, {
-			result: { case: "success", value: create(SetupVmEnvironmentSuccessSchema, {}) },
+			result: {
+				case: "success",
+				value: create(SetupVmEnvironmentSuccessSchema, {}),
+			},
 		});
 	} else {
 		return;
@@ -416,7 +466,9 @@ function handleInteractionQuery(
 			}),
 		},
 	});
-	h2Request.write(frameConnectMessage(toBinary(AgentClientMessageSchema, response)));
+	h2Request.write(
+		frameConnectMessage(toBinary(AgentClientMessageSchema, response)),
+	);
 }
 
 function handleKvServerMessage(
@@ -441,7 +493,9 @@ function handleKvServerMessage(
 				}),
 			},
 		});
-		h2Request.write(frameConnectMessage(toBinary(AgentClientMessageSchema, response)));
+		h2Request.write(
+			frameConnectMessage(toBinary(AgentClientMessageSchema, response)),
+		);
 		return;
 	}
 	if (kvCase === "setBlobArgs") {
@@ -460,7 +514,9 @@ function handleKvServerMessage(
 				}),
 			},
 		});
-		h2Request.write(frameConnectMessage(toBinary(AgentClientMessageSchema, response)));
+		h2Request.write(
+			frameConnectMessage(toBinary(AgentClientMessageSchema, response)),
+		);
 	}
 }
 
@@ -484,12 +540,16 @@ function processInteractionUpdate(
 			};
 			output.content.push(block);
 			state.setTextBlock(block);
-			stream.push({ type: "text_start", contentIndex: output.content.length - 1, partial: output });
+			stream.push({
+				type: "text_start",
+				contentIndex: output.content.length - 1,
+				partial: output,
+			});
 		}
-		state.currentTextBlock.text += delta;
+		state.currentTextBlock!.text += delta;
 		stream.push({
 			type: "text_delta",
-			contentIndex: output.content.indexOf(state.currentTextBlock),
+			contentIndex: output.content.indexOf(state.currentTextBlock!),
 			delta,
 			partial: output,
 		});
@@ -507,12 +567,16 @@ function processInteractionUpdate(
 			};
 			output.content.push(block);
 			state.setThinkingBlock(block);
-			stream.push({ type: "thinking_start", contentIndex: output.content.length - 1, partial: output });
+			stream.push({
+				type: "thinking_start",
+				contentIndex: output.content.length - 1,
+				partial: output,
+			});
 		}
-		state.currentThinkingBlock.thinking += delta;
+		state.currentThinkingBlock!.thinking += delta;
 		stream.push({
 			type: "thinking_delta",
-			contentIndex: output.content.indexOf(state.currentThinkingBlock),
+			contentIndex: output.content.indexOf(state.currentThinkingBlock!),
 			delta,
 			partial: output,
 		});
@@ -544,7 +608,11 @@ function processInteractionUpdate(
 		const tokens = Number(update.message?.value?.tokens || 0);
 		usageState.sawTokenDelta = true;
 		output.usage.output += tokens;
-		output.usage.totalTokens = output.usage.input + output.usage.output + output.usage.cacheRead + output.usage.cacheWrite;
+		output.usage.totalTokens =
+			output.usage.input +
+			output.usage.output +
+			output.usage.cacheRead +
+			output.usage.cacheWrite;
 	}
 }
 
@@ -563,7 +631,11 @@ function handleConversationCheckpointUpdate(
 		return;
 	}
 	output.usage.output = usedTokens;
-	output.usage.totalTokens = output.usage.input + output.usage.output + output.usage.cacheRead + output.usage.cacheWrite;
+	output.usage.totalTokens =
+		output.usage.input +
+		output.usage.output +
+		output.usage.cacheRead +
+		output.usage.cacheWrite;
 }
 
 function frameConnectMessage(data: Uint8Array, flags = 0): Buffer {
@@ -576,10 +648,14 @@ function frameConnectMessage(data: Uint8Array, flags = 0): Buffer {
 
 function parseConnectEndStream(data: Uint8Array): Error | null {
 	try {
-		const payload = JSON.parse(new TextDecoder().decode(data)) as { error?: { code?: string; message?: string } };
+		const payload = JSON.parse(new TextDecoder().decode(data)) as {
+			error?: { code?: string; message?: string };
+		};
 		const error = payload.error;
 		if (error) {
-			return new Error(`Connect error ${error.code ?? "unknown"}: ${error.message ?? "Unknown error"}`);
+			return new Error(
+				`Connect error ${error.code ?? "unknown"}: ${error.message ?? "Unknown error"}`,
+			);
 		}
 		return null;
 	} catch {
@@ -611,7 +687,10 @@ function buildGrpcRequest(
 
 	const lastMessage = context.messages[context.messages.length - 1];
 	const lastRole = lastMessage ? getMessageRole(lastMessage) : undefined;
-	const userText = lastRole === "user" || lastRole === "developer" ? extractUserMessageText(lastMessage) : "";
+	const userText =
+		lastRole === "user" || lastRole === "developer"
+			? extractUserMessageText(lastMessage)
+			: "";
 	if (!userText) {
 		throw new Error("Cannot send empty user message to Cursor API");
 	}
@@ -628,9 +707,10 @@ function buildGrpcRequest(
 	});
 
 	const turns = buildConversationTurns(context.messages);
-	const hasMatchingPrompt = state.conversationState?.rootPromptMessagesJson?.some((entry) =>
-		Buffer.from(entry).equals(systemPromptId),
-	);
+	const hasMatchingPrompt =
+		state.conversationState?.rootPromptMessagesJson?.some((entry) =>
+			Buffer.from(entry).equals(systemPromptId),
+		);
 
 	const baseState =
 		state.conversationState && hasMatchingPrompt
@@ -735,7 +815,9 @@ function buildConversationTurns(messages: Message[]): Uint8Array[] {
 					const step = create(ConversationStepSchema, {
 						message: {
 							case: "assistantMessage",
-							value: create(AssistantMessageSchema, { text: `[Tool Result]\n${text}` }),
+							value: create(AssistantMessageSchema, {
+								text: `[Tool Result]\n${text}`,
+							}),
 						},
 					});
 					stepBytes.push(toBinary(ConversationStepSchema, step));
@@ -780,7 +862,10 @@ function extractUserMessageText(message: Message | undefined): string {
 			if (item.type === "text") {
 				return item.text;
 			}
-			return `[${item.mimeType} image omitted]`;
+			if (item.type === "image") {
+				return `[${item.mimeType} image omitted]`;
+			}
+			return `[${item.type} omitted]`;
 		})
 		.join("\n")
 		.trim();
@@ -799,7 +884,11 @@ function extractAssistantMessageText(message: Message): string {
 }
 
 function toolResultToText(toolResult: ToolResultMessage): string {
-	return toolResult.content.map((item) => (item.type === "text" ? item.text : `[${item.mimeType} image]`)).join("\n");
+	return toolResult.content
+		.map((item) =>
+			item.type === "text" ? item.text : `[${item.mimeType} image]`,
+		)
+		.join("\n");
 }
 
 function createBlobId(data: Uint8Array): Uint8Array {
