@@ -65,6 +65,26 @@ describe("cursor-exec-utils", () => {
 		expect(buildGrepArgs({ pattern: "needle" } as any, ".", "count")).toContain(
 			"--count",
 		);
+		expect(
+			buildGrepArgs(
+				{ pattern: "needle", sort: "path", context: 2 } as any,
+				".",
+				"content",
+			),
+		).toEqual([
+			"--hidden",
+			"--line-number",
+			"--color=never",
+			"--sort",
+			"path",
+			"--json",
+			"-B",
+			"2",
+			"-A",
+			"2",
+			"needle",
+			".",
+		]);
 	});
 
 	test("path helpers resolve workspace, home, and system paths correctly", () => {
@@ -79,7 +99,15 @@ describe("cursor-exec-utils", () => {
 		expect(resolveToCwd("/workspace/project/src/index.ts", cwd)).toBe(
 			"/workspace/project/src/index.ts",
 		);
+		expect(resolveToCwd("/", cwd)).toBe(cwd);
 		expect(resolveToCwd("/tmp/output.log", cwd)).toBe("/tmp/output.log");
+		expect(resolveToCwd("/outside/project.txt", cwd)).toBe(
+			"/workspace/project/outside/project.txt",
+		);
+		expect(formatWorkspacePath("/workspace/other/index.ts", cwd)).toBe(
+			"/workspace/other/index.ts",
+		);
+		expect(expandPath("~")).toBe(os.homedir());
 		expect(expandPath("@~/notes.txt")).toBe(
 			path.join(os.homedir(), "notes.txt"),
 		);
@@ -102,6 +130,19 @@ describe("cursor-exec-utils", () => {
 			count: 4,
 		});
 		expect(parseCountLine("not-a-count", "/workspace/project")).toBe(null);
+		expect(
+			parseCountLine(
+				"/workspace/project/src/index.ts\x00nope",
+				"/workspace/project",
+			),
+		).toBe(null);
+		expect(parseCountLine(":4", "/workspace/project")).toBe(null);
+		expect(
+			parseCountLine(
+				"/workspace/project/src/index.ts:not-a-number",
+				"/workspace/project",
+			),
+		).toBe(null);
 	});
 
 	test("summarizeGrepResult summarizes content, file, and count responses", () => {
@@ -156,12 +197,57 @@ describe("cursor-exec-utils", () => {
 				},
 			}),
 		).toBe("8 total match(es)");
+		expect(
+			summarizeGrepResult({
+				result: {
+					case: "error",
+				},
+			}),
+		).toBeUndefined();
+		expect(
+			summarizeGrepResult({
+				result: {
+					case: "success",
+					value: {},
+				},
+			}),
+		).toBeUndefined();
+		expect(
+			summarizeGrepResult({
+				result: {
+					case: "success",
+					value: {
+						workspaceResults: {
+							workspace: {},
+						},
+					},
+				},
+			}),
+		).toBeUndefined();
+		expect(
+			summarizeGrepResult({
+				result: {
+					case: "success",
+					value: {
+						workspaceResults: {
+							workspace: {
+								result: {
+									case: "other",
+									value: {},
+								},
+							},
+						},
+					},
+				},
+			}),
+		).toBeUndefined();
 	});
 
 	test("sanitizeShellText strips control characters but preserves whitespace", () => {
 		expect(sanitizeShellText("hello\u0007\tworld\nnext\uFFF9")).toBe(
 			"hello\tworld\nnext",
 		);
+		expect(sanitizeShellText("ok\rkeep 😀\uFFFB")).toBe("ok\rkeep 😀");
 	});
 
 	test("buildOutputLocation reports file metadata for captured shell output", () => {
@@ -176,6 +262,9 @@ describe("cursor-exec-utils", () => {
 			sizeBytes: BigInt(Buffer.byteLength("line one\nline two\n")),
 			lineCount: 3n,
 		});
+		expect(
+			buildOutputLocation(path.join(tempDir, "missing.log")),
+		).toBeUndefined();
 		expect(buildOutputLocation("")).toBeUndefined();
 	});
 });

@@ -178,10 +178,7 @@ export function summarizeGrepResult(result: {
 export function sanitizeShellText(text: string): string {
 	return Array.from(text)
 		.filter((char) => {
-			const code = char.codePointAt(0);
-			if (code === undefined) {
-				return false;
-			}
+			const code = char.codePointAt(0)!;
 			if (code === 0x09 || code === 0x0a || code === 0x0d) {
 				return true;
 			}
