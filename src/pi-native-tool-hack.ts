@@ -17,6 +17,12 @@ let currentInteractiveMode: any = null;
 let installPromise: Promise<void> | null = null;
 let AssistantMessageComponentClass: any = null;
 
+export function __resetPiNativeToolHackForTests(): void {
+	currentInteractiveMode = null;
+	installPromise = null;
+	AssistantMessageComponentClass = null;
+}
+
 export interface NativeToolExecutionResult {
 	content?: Array<{
 		type: string;
