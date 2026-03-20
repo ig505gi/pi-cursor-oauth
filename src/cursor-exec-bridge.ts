@@ -1,6 +1,6 @@
-import { spawn, spawnSync, type ChildProcess } from "node:child_process";
+import { type ChildProcess, spawn, spawnSync } from "node:child_process";
 import * as fs from "node:fs";
-import * as http2 from "node:http2";
+import type * as http2 from "node:http2";
 import * as os from "node:os";
 import * as path from "node:path";
 import { create, toBinary } from "@bufbuild/protobuf";
@@ -11,13 +11,11 @@ import {
 	createReadTool,
 	createWriteTool,
 } from "@mariozechner/pi-coding-agent";
+import { emitCursorExecUi } from "./cursor-exec-ui";
 import {
 	AgentClientMessageSchema,
 	BackgroundShellSpawnErrorSchema,
 	BackgroundShellSpawnResultSchema,
-	ExecClientControlMessageSchema,
-	ExecClientStreamCloseSchema,
-	ExecClientThrowSchema,
 	ComputerUseErrorSchema,
 	ComputerUseResultSchema,
 	CursorRuleSchema,
@@ -32,26 +30,29 @@ import {
 	DeleteSuccessSchema,
 	DiagnosticsRejectedSchema,
 	DiagnosticsResultSchema,
+	ExecClientControlMessageSchema,
+	ExecClientMessageSchema,
+	ExecClientStreamCloseSchema,
+	ExecClientThrowSchema,
 	type ExecServerControlMessage,
 	type ExecServerMessage,
-	ExecClientMessageSchema,
 	FetchErrorSchema,
 	FetchResultSchema,
 	GrepContentMatchSchema,
 	GrepContentResultSchema,
+	GrepCountResultSchema,
 	GrepErrorSchema,
 	GrepFileCountSchema,
 	GrepFileMatchSchema,
 	GrepFilesResultSchema,
-	GrepCountResultSchema,
 	GrepResultSchema,
 	GrepSuccessSchema,
 	GrepUnionResultSchema,
 	ListMcpResourcesErrorSchema,
 	ListMcpResourcesExecResultSchema,
 	ListMcpResourcesRejectedSchema,
-	LsDirectoryTreeNodeSchema,
 	LsDirectoryTreeNode_FileSchema,
+	LsDirectoryTreeNodeSchema,
 	LsErrorSchema,
 	LsResultSchema,
 	LsSuccessSchema,
@@ -89,7 +90,6 @@ import {
 	WriteShellStdinResultSchema,
 	WriteSuccessSchema,
 } from "./cursor-gen/agent_pb";
-import { emitCursorExecUi } from "./cursor-exec-ui";
 
 const MAX_INLINE_DELETE_PREVIEW_BYTES = 50 * 1024;
 
@@ -104,7 +104,12 @@ export interface CursorExecBridge {
 interface ToolExecution {
 	isError: boolean;
 	result?: {
-		content: Array<{ type: string; text?: string; data?: string; mimeType?: string }>;
+		content: Array<{
+			type: string;
+			text?: string;
+			data?: string;
+			mimeType?: string;
+		}>;
 		details?: Record<string, unknown> | undefined;
 	};
 	error?: string;
@@ -131,7 +136,12 @@ export function getCursorExecBridge(): CursorExecBridge | null {
 	return currentCursorExecBridge;
 }
 
-function emitExecStart(tool: string, title: string, body?: string, meta?: Record<string, unknown>): void {
+function emitExecStart(
+	tool: string,
+	title: string,
+	body?: string,
+	meta?: Record<string, unknown>,
+): void {
 	emitCursorExecUi({ tool, title, status: "running", body, meta });
 }
 
@@ -146,7 +156,9 @@ function emitExecDone(
 	emitCursorExecUi({ tool, title, status, body, preview, meta });
 }
 
-export function handleExecServerControlMessage(controlMsg: ExecServerControlMessage): void {
+export function handleExecServerControlMessage(
+	controlMsg: ExecServerControlMessage,
+): void {
 	if (controlMsg.message.case !== "abort") {
 		return;
 	}
@@ -164,7 +176,8 @@ export async function handleExecServerMessage(
 ): Promise<void> {
 	const activeBridge = bridge ?? createCursorExecBridge(process.cwd());
 	const execCase = execMsg.message.case;
-	const shouldCloseStream = execMsg.execId.length > 0 || execCase === "shellStreamArgs";
+	const shouldCloseStream =
+		execMsg.execId.length > 0 || execCase === "shellStreamArgs";
 	let streamClosed = false;
 
 	const closeExecStream = () => {
@@ -172,7 +185,11 @@ export async function handleExecServerMessage(
 			return;
 		}
 		streamClosed = true;
-		sendExecClientControlMessage(execMsg, "streamClose", create(ExecClientStreamCloseSchema, { id: execMsg.id }));
+		sendExecClientControlMessage(
+			execMsg,
+			"streamClose",
+			create(ExecClientStreamCloseSchema, { id: execMsg.id }),
+		);
 	};
 
 	const sendFinalExecClientMessage = (messageCase: string, value: unknown) => {
@@ -182,37 +199,58 @@ export async function handleExecServerMessage(
 
 	try {
 		if (execCase === "requestContextArgs") {
-			sendFinalExecClientMessage("requestContextResult", buildRequestContextResult());
+			sendFinalExecClientMessage(
+				"requestContextResult",
+				buildRequestContextResult(),
+			);
 			return;
 		}
 
 		if (execCase === "readArgs") {
 			const args = execMsg.message.value;
 			emitExecStart("read", args.path);
-			const execution = await executeTool(activeBridge.readTool, args.toolCallId, { path: args.path });
+			const execution = await executeTool(
+				activeBridge.readTool,
+				args.toolCallId,
+				{ path: args.path },
+			);
 			emitExecDone(
 				"read",
 				args.path,
 				execution.isError ? "error" : "success",
 				execution.isError ? execution.error : "Read complete",
-				execution.isError ? undefined : previewText(getPrimaryText(execution.result)),
+				execution.isError
+					? undefined
+					: previewText(getPrimaryText(execution.result)),
 			);
-			sendFinalExecClientMessage("readResult", buildReadResult(args.path, activeBridge.cwd, execution));
+			sendFinalExecClientMessage(
+				"readResult",
+				buildReadResult(args.path, activeBridge.cwd, execution),
+			);
 			return;
 		}
 
 		if (execCase === "lsArgs") {
 			const args = execMsg.message.value;
 			emitExecStart("ls", args.path || ".");
-			const execution = await executeTool(activeBridge.lsTool, args.toolCallId, { path: args.path });
+			const execution = await executeTool(
+				activeBridge.lsTool,
+				args.toolCallId,
+				{ path: args.path },
+			);
 			emitExecDone(
 				"ls",
 				args.path || ".",
 				execution.isError ? "error" : "success",
 				execution.isError ? execution.error : "Listed directory",
-				execution.isError ? undefined : previewText(getPrimaryText(execution.result)),
+				execution.isError
+					? undefined
+					: previewText(getPrimaryText(execution.result)),
 			);
-			sendFinalExecClientMessage("lsResult", buildLsResult(args.path, activeBridge.cwd, execution));
+			sendFinalExecClientMessage(
+				"lsResult",
+				buildLsResult(args.path, activeBridge.cwd, execution),
+			);
 			return;
 		}
 
@@ -233,27 +271,41 @@ export async function handleExecServerMessage(
 							case: "rejected",
 							value: create(WriteRejectedSchema, {
 								path: args.path,
-								reason: "Binary file writes via fileBytes are not supported by this extension yet.",
+								reason:
+									"Binary file writes via fileBytes are not supported by this extension yet.",
 							}),
 						},
 					}),
 				);
 				return;
 			}
-			const execution = await executeTool(activeBridge.writeTool, args.toolCallId, {
-				path: args.path,
-				content: args.fileText,
-			});
+			const execution = await executeTool(
+				activeBridge.writeTool,
+				args.toolCallId,
+				{
+					path: args.path,
+					content: args.fileText,
+				},
+			);
 			emitExecDone(
 				"write",
 				args.path,
 				execution.isError ? "error" : "success",
-				execution.isError ? execution.error : `Wrote ${countLines(args.fileText)} line(s)`,
-				args.returnFileContentAfterWrite ? previewText(args.fileText) : undefined,
+				execution.isError
+					? execution.error
+					: `Wrote ${countLines(args.fileText)} line(s)`,
+				args.returnFileContentAfterWrite
+					? previewText(args.fileText)
+					: undefined,
 			);
 			sendFinalExecClientMessage(
 				"writeResult",
-				buildWriteResult(args.path, args.fileText, args.returnFileContentAfterWrite, execution),
+				buildWriteResult(
+					args.path,
+					args.fileText,
+					args.returnFileContentAfterWrite,
+					execution,
+				),
 			);
 			return;
 		}
@@ -273,7 +325,9 @@ export async function handleExecServerMessage(
 				deleteResult.result.case === "success"
 					? "File deleted"
 					: "Delete failed",
-				deleteResult.result.case === "success" ? previewText(deleteResult.result.value.prevContent) : undefined,
+				deleteResult.result.case === "success"
+					? previewText(deleteResult.result.value.prevContent)
+					: undefined,
 			);
 			sendFinalExecClientMessage("deleteResult", deleteResult);
 			return;
@@ -281,7 +335,10 @@ export async function handleExecServerMessage(
 
 		if (execCase === "shellArgs") {
 			const args = execMsg.message.value;
-			const resolvedCwd = resolveToCwd(args.workingDirectory || ".", activeBridge.cwd);
+			const resolvedCwd = resolveToCwd(
+				args.workingDirectory || ".",
+				activeBridge.cwd,
+			);
 			emitExecStart("shell", args.command, `cwd: ${resolvedCwd}`);
 			const bashTool = createBashTool(resolvedCwd);
 			const startedAt = Date.now();
@@ -294,18 +351,31 @@ export async function handleExecServerMessage(
 				args.command,
 				execution.isError ? "error" : "success",
 				execution.isError ? execution.error : `cwd: ${resolvedCwd}`,
-				previewText(execution.isError ? execution.error : getPrimaryText(execution.result)),
+				previewText(
+					execution.isError
+						? execution.error
+						: getPrimaryText(execution.result),
+				),
 			);
 			sendFinalExecClientMessage(
 				"shellResult",
-				buildShellResult(args.command, resolvedCwd, args.timeout, execution, Date.now() - startedAt),
+				buildShellResult(
+					args.command,
+					resolvedCwd,
+					args.timeout,
+					execution,
+					Date.now() - startedAt,
+				),
 			);
 			return;
 		}
 
 		if (execCase === "shellStreamArgs") {
 			const args = execMsg.message.value;
-			const resolvedCwd = resolveToCwd(args.workingDirectory || ".", activeBridge.cwd);
+			const resolvedCwd = resolveToCwd(
+				args.workingDirectory || ".",
+				activeBridge.cwd,
+			);
 			emitExecStart("shellStream", args.command, `cwd: ${resolvedCwd}`);
 			const streamResult = await streamShellCommand(
 				execMsg,
@@ -318,9 +388,15 @@ export async function handleExecServerMessage(
 			emitExecDone(
 				"shellStream",
 				args.command,
-				streamResult.aborted || streamResult.exitCode !== 0 ? "error" : "success",
-				streamResult.aborted ? "Command aborted" : `Exit code: ${streamResult.exitCode}`,
-				streamResult.outputFilePath ? `Output saved to ${streamResult.outputFilePath}` : undefined,
+				streamResult.aborted || streamResult.exitCode !== 0
+					? "error"
+					: "success",
+				streamResult.aborted
+					? "Command aborted"
+					: `Exit code: ${streamResult.exitCode}`,
+				streamResult.outputFilePath
+					? `Output saved to ${streamResult.outputFilePath}`
+					: undefined,
 			);
 			closeExecStream();
 			return;
@@ -335,7 +411,9 @@ export async function handleExecServerMessage(
 				args.pattern,
 				grepResult.result.case === "success" ? "success" : "error",
 				args.path || ".",
-				grepResult.result.case === "success" ? summarizeGrepResult(grepResult) : grepResult.result.value.error,
+				grepResult.result.case === "success"
+					? summarizeGrepResult(grepResult)
+					: grepResult.result.value?.error,
 			);
 			sendFinalExecClientMessage("grepResult", grepResult);
 			return;
@@ -350,7 +428,8 @@ export async function handleExecServerMessage(
 						case: "rejected",
 						value: create(DiagnosticsRejectedSchema, {
 							path: args.path,
-							reason: "Diagnostics are not available via the public pi extension API.",
+							reason:
+								"Diagnostics are not available via the public pi extension API.",
 						}),
 					},
 				}),
@@ -385,7 +464,8 @@ export async function handleExecServerMessage(
 						value: create(BackgroundShellSpawnErrorSchema, {
 							command: args.command,
 							workingDirectory: args.workingDirectory,
-							error: "Background shells are not supported by this extension yet.",
+							error:
+								"Background shells are not supported by this extension yet.",
 						}),
 					},
 				}),
@@ -433,7 +513,8 @@ export async function handleExecServerMessage(
 					result: {
 						case: "rejected",
 						value: create(ListMcpResourcesRejectedSchema, {
-							reason: "MCP resource listing is not supported by this extension yet.",
+							reason:
+								"MCP resource listing is not supported by this extension yet.",
 						}),
 					},
 				}),
@@ -450,7 +531,8 @@ export async function handleExecServerMessage(
 						case: "rejected",
 						value: create(ReadMcpResourceRejectedSchema, {
 							uri: args.uri,
-							reason: "MCP resource reads are not supported by this extension yet.",
+							reason:
+								"MCP resource reads are not supported by this extension yet.",
 						}),
 					},
 				}),
@@ -514,7 +596,11 @@ export async function handleExecServerMessage(
 		closeExecStream();
 	}
 
-	function sendExecClientMessage(incoming: ExecServerMessage, messageCase: string, value: unknown): void {
+	function sendExecClientMessage(
+		incoming: ExecServerMessage,
+		messageCase: string,
+		value: unknown,
+	): void {
 		const clientMessage = create(AgentClientMessageSchema, {
 			message: {
 				case: "execClientMessage",
@@ -525,10 +611,16 @@ export async function handleExecServerMessage(
 				}),
 			},
 		});
-		h2Request.write(frameConnectMessage(toBinary(AgentClientMessageSchema, clientMessage)));
+		h2Request.write(
+			frameConnectMessage(toBinary(AgentClientMessageSchema, clientMessage)),
+		);
 	}
 
-	function sendExecClientControlMessage(incoming: ExecServerMessage, messageCase: string, value: unknown): void {
+	function sendExecClientControlMessage(
+		_incoming: ExecServerMessage,
+		messageCase: string,
+		value: unknown,
+	): void {
 		const clientMessage = create(AgentClientMessageSchema, {
 			message: {
 				case: "execClientControlMessage",
@@ -537,11 +629,17 @@ export async function handleExecServerMessage(
 				}),
 			},
 		});
-		h2Request.write(frameConnectMessage(toBinary(AgentClientMessageSchema, clientMessage)));
+		h2Request.write(
+			frameConnectMessage(toBinary(AgentClientMessageSchema, clientMessage)),
+		);
 	}
 }
 
-async function executeTool(tool: { execute: Function }, toolCallId: string, params: Record<string, unknown>): Promise<ToolExecution> {
+async function executeTool(
+	tool: { execute: Function },
+	toolCallId: string,
+	params: Record<string, unknown>,
+): Promise<ToolExecution> {
 	try {
 		const result = await tool.execute(toolCallId, params, undefined, undefined);
 		return { isError: false, result };
@@ -553,7 +651,11 @@ async function executeTool(tool: { execute: Function }, toolCallId: string, para
 	}
 }
 
-type ExecMessageSender = (incoming: ExecServerMessage, messageCase: string, value: unknown) => void;
+type ExecMessageSender = (
+	incoming: ExecServerMessage,
+	messageCase: string,
+	value: unknown,
+) => void;
 
 interface CursorGrepArgs {
 	pattern: string;
@@ -651,7 +753,10 @@ async function streamShellCommand(
 		}),
 	);
 
-	const threshold = typeof fileOutputThresholdBytes === "bigint" ? Number(fileOutputThresholdBytes) : 0;
+	const threshold =
+		typeof fileOutputThresholdBytes === "bigint"
+			? Number(fileOutputThresholdBytes)
+			: 0;
 	let totalOutputBytes = 0;
 	let bufferedOutput: Buffer[] = [];
 	let outputFilePath: string | undefined;
@@ -660,7 +765,10 @@ async function streamShellCommand(
 	const appendOutput = (chunk: Buffer) => {
 		totalOutputBytes += chunk.length;
 		if (!outputFilePath && threshold > 0 && totalOutputBytes > threshold) {
-			outputFilePath = path.join(os.tmpdir(), `cursor-shell-stream-${crypto.randomUUID()}.log`);
+			outputFilePath = path.join(
+				os.tmpdir(),
+				`cursor-shell-stream-${crypto.randomUUID()}.log`,
+			);
 			for (const bufferedChunk of bufferedOutput) {
 				fs.appendFileSync(outputFilePath, bufferedChunk);
 			}
@@ -681,7 +789,9 @@ async function streamShellCommand(
 			create(ShellStreamSchema, {
 				event: {
 					case: "stdout",
-					value: create(ShellStreamStdoutSchema, { data: sanitizeShellText(chunk.toString("utf8")) }),
+					value: create(ShellStreamStdoutSchema, {
+						data: sanitizeShellText(chunk.toString("utf8")),
+					}),
 				},
 			}),
 		);
@@ -695,7 +805,9 @@ async function streamShellCommand(
 			create(ShellStreamSchema, {
 				event: {
 					case: "stderr",
-					value: create(ShellStreamStderrSchema, { data: sanitizeShellText(chunk.toString("utf8")) }),
+					value: create(ShellStreamStderrSchema, {
+						data: sanitizeShellText(chunk.toString("utf8")),
+					}),
 				},
 			}),
 		);
@@ -704,9 +816,9 @@ async function streamShellCommand(
 	const timeoutHandle =
 		timeoutSeconds > 0
 			? setTimeout(() => {
-				timedOut = true;
-				killProcessTree(child.pid);
-			}, timeoutSeconds * 1000)
+					timedOut = true;
+					killProcessTree(child.pid);
+				}, timeoutSeconds * 1000)
 			: undefined;
 
 	const exitCode = await new Promise<number>((resolve) => {
@@ -718,7 +830,9 @@ async function streamShellCommand(
 				create(ShellStreamSchema, {
 					event: {
 						case: "stderr",
-						value: create(ShellStreamStderrSchema, { data: sanitizeShellText(String(error)) }),
+						value: create(ShellStreamStderrSchema, {
+							data: sanitizeShellText(String(error)),
+						}),
 					},
 				}),
 			);
@@ -770,11 +884,20 @@ async function buildGrepResult(args: CursorGrepArgs, cwd: string) {
 		const searchPath = resolveToCwd(args.path || ".", cwd);
 		const outputMode = args.outputMode || "content";
 		const workspaceKey = cwd;
-		const headLimit = args.headLimit && args.headLimit > 0 ? args.headLimit : undefined;
+		const headLimit =
+			args.headLimit && args.headLimit > 0 ? args.headLimit : undefined;
 
-		let unionResult;
+		let unionResult:
+			| ReturnType<typeof create<typeof GrepUnionResultSchema>>
+			| undefined;
 		if (outputMode === "content") {
-			const collected = await runGrepContent(rgPath, args, searchPath, cwd, headLimit);
+			const collected = await runGrepContent(
+				rgPath,
+				args,
+				searchPath,
+				cwd,
+				headLimit,
+			);
 			unionResult = create(GrepUnionResultSchema, {
 				result: {
 					case: "content",
@@ -800,7 +923,13 @@ async function buildGrepResult(args: CursorGrepArgs, cwd: string) {
 				},
 			});
 		} else if (outputMode === "files_with_matches") {
-			const files = await runGrepFiles(rgPath, args, searchPath, cwd, headLimit);
+			const files = await runGrepFiles(
+				rgPath,
+				args,
+				searchPath,
+				cwd,
+				headLimit,
+			);
 			unionResult = create(GrepUnionResultSchema, {
 				result: {
 					case: "files",
@@ -808,7 +937,13 @@ async function buildGrepResult(args: CursorGrepArgs, cwd: string) {
 				},
 			});
 		} else if (outputMode === "count") {
-			const countResult = await runGrepCount(rgPath, args, searchPath, cwd, headLimit);
+			const countResult = await runGrepCount(
+				rgPath,
+				args,
+				searchPath,
+				cwd,
+				headLimit,
+			);
 			unionResult = create(GrepUnionResultSchema, {
 				result: {
 					case: "count",
@@ -859,7 +994,9 @@ async function runGrepContent(
 	const rgArgs = buildGrepArgs(args, searchPath, "content");
 	const output = await runCommand(rgPath, rgArgs, cwd);
 	if (output.exitCode !== 0 && output.exitCode !== 1) {
-		throw new Error(output.stderr.trim() || `ripgrep exited with code ${output.exitCode}`);
+		throw new Error(
+			output.stderr.trim() || `ripgrep exited with code ${output.exitCode}`,
+		);
 	}
 
 	const files = new Map<string, GrepCollectedLine[]>();
@@ -885,7 +1022,11 @@ async function runGrepContent(
 		const absoluteFile = event.data?.path?.text;
 		const lineNumber = event.data?.line_number;
 		const content = event.data?.lines?.text;
-		if (!absoluteFile || typeof lineNumber !== "number" || typeof content !== "string") {
+		if (
+			!absoluteFile ||
+			typeof lineNumber !== "number" ||
+			typeof content !== "string"
+		) {
 			continue;
 		}
 		totalLines += 1;
@@ -922,11 +1063,18 @@ async function runGrepFiles(
 	searchPath: string,
 	cwd: string,
 	headLimit?: number,
-): Promise<{ files: string[]; totalFiles: number; clientTruncated: boolean; ripgrepTruncated: boolean }> {
+): Promise<{
+	files: string[];
+	totalFiles: number;
+	clientTruncated: boolean;
+	ripgrepTruncated: boolean;
+}> {
 	const rgArgs = buildGrepArgs(args, searchPath, "files_with_matches");
 	const output = await runCommand(rgPath, rgArgs, cwd);
 	if (output.exitCode !== 0 && output.exitCode !== 1) {
-		throw new Error(output.stderr.trim() || `ripgrep exited with code ${output.exitCode}`);
+		throw new Error(
+			output.stderr.trim() || `ripgrep exited with code ${output.exitCode}`,
+		);
 	}
 	const allFiles = output.stdout
 		.split("\0")
@@ -959,12 +1107,16 @@ async function runGrepCount(
 	const rgArgs = buildGrepArgs(args, searchPath, "count");
 	const output = await runCommand(rgPath, rgArgs, cwd);
 	if (output.exitCode !== 0 && output.exitCode !== 1) {
-		throw new Error(output.stderr.trim() || `ripgrep exited with code ${output.exitCode}`);
+		throw new Error(
+			output.stderr.trim() || `ripgrep exited with code ${output.exitCode}`,
+		);
 	}
 	const counts = splitLines(output.stdout)
 		.map((line) => trimTrailingNewline(line))
 		.map((line) => parseCountLine(line, cwd))
-		.filter((entry): entry is { file: string; count: number } => entry !== null);
+		.filter(
+			(entry): entry is { file: string; count: number } => entry !== null,
+		);
 	const limited = headLimit ? counts.slice(0, headLimit) : counts;
 	return {
 		counts: limited.map((entry) => create(GrepFileCountSchema, entry)),
@@ -975,7 +1127,11 @@ async function runGrepCount(
 	};
 }
 
-function buildGrepArgs(args: CursorGrepArgs, searchPath: string, outputMode: string): string[] {
+function buildGrepArgs(
+	args: CursorGrepArgs,
+	searchPath: string,
+	outputMode: string,
+): string[] {
 	const rgArgs = ["--hidden", "--line-number", "--color=never"];
 	if (args.caseInsensitive) {
 		rgArgs.push("--ignore-case");
@@ -1017,7 +1173,10 @@ async function runCommand(
 	cwd: string,
 ): Promise<{ stdout: string; stderr: string; exitCode: number }> {
 	return await new Promise((resolve, reject) => {
-		const child = spawn(command, args, { cwd, stdio: ["ignore", "pipe", "pipe"] });
+		const child = spawn(command, args, {
+			cwd,
+			stdio: ["ignore", "pipe", "pipe"],
+		});
 		const stdout: Buffer[] = [];
 		const stderr: Buffer[] = [];
 		child.stdout?.on("data", (chunk: Buffer) => stdout.push(chunk));
@@ -1035,7 +1194,9 @@ async function runCommand(
 
 function findRgBinary(): string | null {
 	if (process.platform === "win32") {
-		return findCommandOnPath("rg.exe", "where") ?? findCommandOnPath("rg", "where");
+		return (
+			findCommandOnPath("rg.exe", "where") ?? findCommandOnPath("rg", "where")
+		);
 	}
 	return findCommandOnPath("rg", "which");
 }
@@ -1056,7 +1217,10 @@ function splitLines(text: string): string[] {
 	return text.replace(/\r\n/g, "\n").replace(/\r/g, "\n").split("\n");
 }
 
-function parseCountLine(line: string, cwd: string): { file: string; count: number } | null {
+function parseCountLine(
+	line: string,
+	cwd: string,
+): { file: string; count: number } | null {
 	const parts = line.split("\0");
 	if (parts.length >= 2) {
 		const file = parts[0]?.trim();
@@ -1116,17 +1280,27 @@ function buildRequestContextResult() {
 	});
 }
 
-function buildReadResult(requestPath: string, cwd: string, execution: ToolExecution) {
+function buildReadResult(
+	requestPath: string,
+	cwd: string,
+	execution: ToolExecution,
+) {
 	if (execution.isError) {
 		const error = execution.error || "Unknown read error";
 		if (isNotFoundError(error)) {
 			return create(ReadResultSchema, {
-				result: { case: "fileNotFound", value: create(ReadFileNotFoundSchema, { path: requestPath }) },
+				result: {
+					case: "fileNotFound",
+					value: create(ReadFileNotFoundSchema, { path: requestPath }),
+				},
 			});
 		}
 		if (isPermissionError(error)) {
 			return create(ReadResultSchema, {
-				result: { case: "permissionDenied", value: create(ReadPermissionDeniedSchema, { path: requestPath }) },
+				result: {
+					case: "permissionDenied",
+					value: create(ReadPermissionDeniedSchema, { path: requestPath }),
+				},
 			});
 		}
 		if (isDirectoryError(error)) {
@@ -1141,15 +1315,22 @@ function buildReadResult(requestPath: string, cwd: string, execution: ToolExecut
 			});
 		}
 		return create(ReadResultSchema, {
-			result: { case: "error", value: create(ReadErrorSchema, { path: requestPath, error }) },
+			result: {
+				case: "error",
+				value: create(ReadErrorSchema, { path: requestPath, error }),
+			},
 		});
 	}
 
 	const result = execution.result!;
 	const absolutePath = resolveToCwd(requestPath, cwd);
 	const stat = safeStat(absolutePath);
-	const textItem = result.content.find((item) => item.type === "text" && typeof item.text === "string");
-	const imageItem = result.content.find((item) => item.type === "image" && typeof item.data === "string");
+	const textItem = result.content.find(
+		(item) => item.type === "text" && typeof item.text === "string",
+	);
+	const imageItem = result.content.find(
+		(item) => item.type === "image" && typeof item.data === "string",
+	);
 
 	if (imageItem?.data) {
 		return create(ReadResultSchema, {
@@ -1158,9 +1339,14 @@ function buildReadResult(requestPath: string, cwd: string, execution: ToolExecut
 				value: create(ReadSuccessSchema, {
 					path: requestPath,
 					totalLines: 0,
-					fileSize: BigInt(stat?.size ?? Buffer.from(imageItem.data, "base64").length),
+					fileSize: BigInt(
+						stat?.size ?? Buffer.from(imageItem.data, "base64").length,
+					),
 					truncated: false,
-					output: { case: "data", value: Buffer.from(imageItem.data, "base64") },
+					output: {
+						case: "data",
+						value: Buffer.from(imageItem.data, "base64"),
+					},
 				}),
 			},
 		});
@@ -1168,7 +1354,8 @@ function buildReadResult(requestPath: string, cwd: string, execution: ToolExecut
 
 	const text = textItem?.text || "";
 	const fullText = safeReadUtf8(absolutePath);
-	const totalLines = fullText !== null ? countLines(fullText) : countLines(text);
+	const totalLines =
+		fullText !== null ? countLines(fullText) : countLines(text);
 	const truncation = result.details?.truncation;
 
 	return create(ReadResultSchema, {
@@ -1185,7 +1372,11 @@ function buildReadResult(requestPath: string, cwd: string, execution: ToolExecut
 	});
 }
 
-function buildLsResult(requestPath: string, cwd: string, execution: ToolExecution) {
+function buildLsResult(
+	requestPath: string,
+	cwd: string,
+	execution: ToolExecution,
+) {
 	if (execution.isError) {
 		return create(LsResultSchema, {
 			result: {
@@ -1282,7 +1473,9 @@ function buildWriteResult(
 				path: requestPath,
 				linesCreated: countLines(content),
 				fileSize: Buffer.byteLength(content, "utf8"),
-				fileContentAfterWrite: returnFileContentAfterWrite ? content : undefined,
+				fileContentAfterWrite: returnFileContentAfterWrite
+					? content
+					: undefined,
 			}),
 		},
 	});
@@ -1297,7 +1490,10 @@ function buildDeleteResult(requestPath: string, cwd: string) {
 		const message = error instanceof Error ? error.message : String(error);
 		if (isNotFoundError(message)) {
 			return create(DeleteResultSchema, {
-				result: { case: "fileNotFound", value: create(DeleteFileNotFoundSchema, { path: requestPath }) },
+				result: {
+					case: "fileNotFound",
+					value: create(DeleteFileNotFoundSchema, { path: requestPath }),
+				},
 			});
 		}
 		if (isPermissionError(message)) {
@@ -1313,7 +1509,10 @@ function buildDeleteResult(requestPath: string, cwd: string) {
 			});
 		}
 		return create(DeleteResultSchema, {
-			result: { case: "error", value: create(DeleteErrorSchema, { path: requestPath, error: message }) },
+			result: {
+				case: "error",
+				value: create(DeleteErrorSchema, { path: requestPath, error: message }),
+			},
 		});
 	}
 
@@ -1348,11 +1547,17 @@ function buildDeleteResult(requestPath: string, cwd: string) {
 		}
 		if (message.includes("EBUSY")) {
 			return create(DeleteResultSchema, {
-				result: { case: "fileBusy", value: create(DeleteFileBusySchema, { path: requestPath }) },
+				result: {
+					case: "fileBusy",
+					value: create(DeleteFileBusySchema, { path: requestPath }),
+				},
 			});
 		}
 		return create(DeleteResultSchema, {
-			result: { case: "error", value: create(DeleteErrorSchema, { path: requestPath, error: message }) },
+			result: {
+				case: "error",
+				value: create(DeleteErrorSchema, { path: requestPath, error: message }),
+			},
 		});
 	}
 
@@ -1390,7 +1595,10 @@ function buildShellResult(
 				},
 			});
 		}
-		if (error.includes("Working directory does not exist") || error.includes("spawn")) {
+		if (
+			error.includes("Working directory does not exist") ||
+			error.includes("spawn")
+		) {
 			return create(ShellResultSchema, {
 				result: {
 					case: "spawnError",
@@ -1421,7 +1629,9 @@ function buildShellResult(
 	}
 
 	const text = getPrimaryText(execution.result);
-	const outputLocation = buildOutputLocation(execution.result?.details?.fullOutputPath);
+	const outputLocation = buildOutputLocation(
+		execution.result?.details?.fullOutputPath,
+	);
 	return create(ShellResultSchema, {
 		result: {
 			case: "success",
@@ -1476,7 +1686,11 @@ function getPrimaryText(result: ToolExecution["result"] | undefined): string {
 	);
 }
 
-function previewText(text: string | undefined, maxLines = 12, maxChars = 1500): string | undefined {
+function previewText(
+	text: string | undefined,
+	maxLines = 12,
+	maxChars = 1500,
+): string | undefined {
 	if (!text) {
 		return undefined;
 	}
@@ -1486,13 +1700,18 @@ function previewText(text: string | undefined, maxLines = 12, maxChars = 1500): 
 	}
 	const lines = normalized.split(/\r?\n/).slice(0, maxLines);
 	const joined = lines.join("\n");
-	if (joined.length <= maxChars && lines.length === normalized.split(/\r?\n/).length) {
+	if (
+		joined.length <= maxChars &&
+		lines.length === normalized.split(/\r?\n/).length
+	) {
 		return joined;
 	}
 	return `${joined.slice(0, maxChars)}\n…`;
 }
 
-function summarizeGrepResult(result: { result: { case?: string; value?: any } }): string | undefined {
+function summarizeGrepResult(result: {
+	result: { case?: string; value?: any };
+}): string | undefined {
 	if (result.result.case !== "success") {
 		return undefined;
 	}
@@ -1501,7 +1720,9 @@ function summarizeGrepResult(result: { result: { case?: string; value?: any } })
 		return undefined;
 	}
 	for (const workspace of Object.values(workspaceResults)) {
-		const unionResult = (workspace as { result?: { case?: string; value?: any } })?.result;
+		const unionResult = (
+			workspace as { result?: { case?: string; value?: any } }
+		)?.result;
 		if (!unionResult) {
 			continue;
 		}
@@ -1532,11 +1753,19 @@ function isNoticeLine(line: string): boolean {
 }
 
 function isNotFoundError(error: string): boolean {
-	return error.includes("ENOENT") || error.includes("not found") || error.includes("No such file");
+	return (
+		error.includes("ENOENT") ||
+		error.includes("not found") ||
+		error.includes("No such file")
+	);
 }
 
 function isPermissionError(error: string): boolean {
-	return error.includes("EACCES") || error.includes("EPERM") || error.includes("permission denied");
+	return (
+		error.includes("EACCES") ||
+		error.includes("EPERM") ||
+		error.includes("permission denied")
+	);
 }
 
 function isDirectoryError(error: string): boolean {
@@ -1593,7 +1822,10 @@ function getShellConfig(): { shell: string; args: string[] } {
 		if (bashOnPath) {
 			return { shell: bashOnPath, args: ["-lc"] };
 		}
-		return { shell: process.env.ComSpec || "cmd.exe", args: ["/d", "/s", "/c"] };
+		return {
+			shell: process.env.ComSpec || "cmd.exe",
+			args: ["/d", "/s", "/c"],
+		};
 	}
 	if (fs.existsSync("/bin/bash")) {
 		return { shell: "/bin/bash", args: ["-lc"] };
@@ -1605,9 +1837,15 @@ function getShellConfig(): { shell: string; args: string[] } {
 	return { shell: "sh", args: ["-lc"] };
 }
 
-function findCommandOnPath(command: string, resolver: "which" | "where"): string | null {
+function findCommandOnPath(
+	command: string,
+	resolver: "which" | "where",
+): string | null {
 	try {
-		const result = spawnSync(resolver, [command], { encoding: "utf-8", timeout: 5000 });
+		const result = spawnSync(resolver, [command], {
+			encoding: "utf-8",
+			timeout: 5000,
+		});
 		if (result.status !== 0 || !result.stdout) {
 			return null;
 		}
@@ -1624,7 +1862,10 @@ function killProcessTree(pid: number | undefined): void {
 	}
 	if (process.platform === "win32") {
 		try {
-			spawn("taskkill", ["/F", "/T", "/PID", String(pid)], { stdio: "ignore", detached: true });
+			spawn("taskkill", ["/F", "/T", "/PID", String(pid)], {
+				stdio: "ignore",
+				detached: true,
+			});
 		} catch {
 			// Ignore cleanup errors.
 		}
