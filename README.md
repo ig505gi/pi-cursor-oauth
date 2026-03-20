@@ -42,10 +42,9 @@ Current limitations:
 ### 1. Installation
 
 ```bash
-pi install git:https://github.com/kenryu42/pi-cursor-oauth
+pi install npm:pi-cursor-oauth
 ```
 
-```
 ### 2. Authenticate
 
 Inside pi:
