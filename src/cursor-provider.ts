@@ -532,6 +532,20 @@ function processInteractionUpdate(
 	if (updateCase === "textDelta") {
 		state.setFirstTokenTime();
 		const delta = update.message?.value?.text || "";
+		if (!delta) {
+			return;
+		}
+		if (state.currentThinkingBlock) {
+			const idx = output.content.indexOf(state.currentThinkingBlock);
+			delete (state.currentThinkingBlock as { index?: number }).index;
+			stream.push({
+				type: "thinking_end",
+				contentIndex: idx,
+				content: state.currentThinkingBlock.thinking,
+				partial: output,
+			});
+			state.setThinkingBlock(null);
+		}
 		if (!state.currentTextBlock) {
 			const block: TextContent & { index: number } = {
 				type: "text",
@@ -559,6 +573,20 @@ function processInteractionUpdate(
 	if (updateCase === "thinkingDelta") {
 		state.setFirstTokenTime();
 		const delta = update.message?.value?.text || "";
+		if (!delta) {
+			return;
+		}
+		if (state.currentTextBlock) {
+			const idx = output.content.indexOf(state.currentTextBlock);
+			delete (state.currentTextBlock as { index?: number }).index;
+			stream.push({
+				type: "text_end",
+				contentIndex: idx,
+				content: state.currentTextBlock.text,
+				partial: output,
+			});
+			state.setTextBlock(null);
+		}
 		if (!state.currentThinkingBlock) {
 			const block: ThinkingContent & { index: number } = {
 				type: "thinking",
@@ -596,6 +624,62 @@ function processInteractionUpdate(
 			partial: output,
 		});
 		state.setThinkingBlock(null);
+		return;
+	}
+
+	if (updateCase === "summary") {
+		state.setFirstTokenTime();
+		const summary = update.message?.value?.summary || "";
+		if (!summary) {
+			return;
+		}
+		if (state.currentThinkingBlock) {
+			const idx = output.content.indexOf(state.currentThinkingBlock);
+			delete (state.currentThinkingBlock as { index?: number }).index;
+			stream.push({
+				type: "thinking_end",
+				contentIndex: idx,
+				content: state.currentThinkingBlock.thinking,
+				partial: output,
+			});
+			state.setThinkingBlock(null);
+		}
+		if (!state.currentTextBlock) {
+			const block: TextContent & { index: number } = {
+				type: "text",
+				text: "",
+				index: output.content.length,
+			};
+			output.content.push(block);
+			state.setTextBlock(block);
+			stream.push({
+				type: "text_start",
+				contentIndex: output.content.length - 1,
+				partial: output,
+			});
+		}
+		const current = state.currentTextBlock!.text;
+		if (summary === current) {
+			return;
+		}
+		let delta = "";
+		if (summary.startsWith(current)) {
+			delta = summary.slice(current.length);
+		} else if (!current) {
+			delta = summary;
+		} else if (!current.includes(summary)) {
+			delta = `${current.endsWith("\n") ? "" : "\n"}${summary}`;
+		}
+		if (!delta) {
+			return;
+		}
+		state.currentTextBlock!.text += delta;
+		stream.push({
+			type: "text_delta",
+			contentIndex: output.content.indexOf(state.currentTextBlock!),
+			delta,
+			partial: output,
+		});
 		return;
 	}
 
