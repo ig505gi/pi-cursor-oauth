@@ -1,8 +1,19 @@
-import type { ExtensionAPI, ExtensionContext, ProviderModelConfig } from "@mariozechner/pi-coding-agent";
-import { createCursorExecBridge, setCursorExecBridge } from "./cursor-exec-bridge";
+import type {
+	ExtensionAPI,
+	ExtensionContext,
+	ProviderModelConfig,
+} from "@mariozechner/pi-coding-agent";
+import {
+	createCursorExecBridge,
+	setCursorExecBridge,
+} from "./cursor-exec-bridge";
 import type { CursorExecUiMessage } from "./cursor-exec-ui";
 import { setCursorExecUiSink } from "./cursor-exec-ui";
-import { CURSOR_DEFAULT_BASE_URL, FALLBACK_MODELS, fetchCursorUsableModels } from "./cursor-models";
+import {
+	CURSOR_DEFAULT_BASE_URL,
+	FALLBACK_MODELS,
+	fetchCursorUsableModels,
+} from "./cursor-models";
 import { loginCursor, refreshCursorToken } from "./cursor-oauth";
 import { resetCursorConversation, streamCursorChat } from "./cursor-provider";
 
@@ -17,7 +28,10 @@ let syncInFlight: Promise<boolean> | null = null;
 let execUi: ExtensionContext["ui"] | null = null;
 let execEvents: CursorExecUiMessage[] = [];
 
-function registerCursorProvider(pi: ExtensionAPI, models: ProviderModelConfig[]): void {
+function registerCursorProvider(
+	pi: ExtensionAPI,
+	models: ProviderModelConfig[],
+): void {
 	activeModels = models;
 	pi.registerProvider(PROVIDER_NAME, {
 		baseUrl: CURSOR_DEFAULT_BASE_URL,
@@ -28,13 +42,17 @@ function registerCursorProvider(pi: ExtensionAPI, models: ProviderModelConfig[])
 			name: "Cursor",
 			login: loginCursor,
 			refreshToken: refreshCursorToken,
-			getApiKey: credentials => credentials.access,
+			getApiKey: (credentials) => credentials.access,
 		},
 		streamSimple: streamCursorChat,
 	});
 }
 
-async function syncCursorModels(pi: ExtensionAPI, ctx: ExtensionContext, quiet = false): Promise<boolean> {
+async function syncCursorModels(
+	pi: ExtensionAPI,
+	ctx: ExtensionContext,
+	quiet = false,
+): Promise<boolean> {
 	if (syncInFlight) {
 		return await syncInFlight;
 	}
@@ -43,15 +61,24 @@ async function syncCursorModels(pi: ExtensionAPI, ctx: ExtensionContext, quiet =
 		const apiKey = await ctx.modelRegistry.getApiKeyForProvider(PROVIDER_NAME);
 		if (!apiKey) {
 			if (!quiet) {
-				ctx.ui.notify("No Cursor credentials found. Run /login cursor first.", "warning");
+				ctx.ui.notify(
+					"No Cursor credentials found. Run /login cursor first.",
+					"warning",
+				);
 			}
 			return false;
 		}
 
-		const models = await fetchCursorUsableModels({ apiKey, baseUrl: CURSOR_DEFAULT_BASE_URL });
+		const models = await fetchCursorUsableModels({
+			apiKey,
+			baseUrl: CURSOR_DEFAULT_BASE_URL,
+		});
 		if (!models || models.length === 0) {
 			if (!quiet) {
-				ctx.ui.notify("Failed to fetch usable Cursor models. Keeping fallback model list.", "warning");
+				ctx.ui.notify(
+					"Failed to fetch usable Cursor models. Keeping fallback model list.",
+					"warning",
+				);
 			}
 			return false;
 		}
@@ -70,7 +97,10 @@ async function syncCursorModels(pi: ExtensionAPI, ctx: ExtensionContext, quiet =
 	}
 }
 
-function trimPreview(text: string | undefined, maxLines = 2): string | undefined {
+function trimPreview(
+	text: string | undefined,
+	maxLines = 2,
+): string | undefined {
 	if (!text) {
 		return undefined;
 	}
@@ -85,7 +115,10 @@ function trimPreview(text: string | undefined, maxLines = 2): string | undefined
 	return `${lines.slice(0, maxLines).join("\n")}\n…`;
 }
 
-function compactInline(text: string | undefined, maxChars = 96): string | undefined {
+function compactInline(
+	text: string | undefined,
+	maxChars = 96,
+): string | undefined {
 	const normalized = trimPreview(text, 1)?.replace(/\s+/g, " ").trim();
 	if (!normalized) {
 		return undefined;
@@ -108,7 +141,8 @@ function formatCursorExecEvent(event: CursorExecUiMessage): string {
 						? "!"
 						: "•";
 	const title = compactInline(event.title, 56) ?? event.tool;
-	const summarySource = event.status === "running" ? event.body : event.preview ?? event.body;
+	const summarySource =
+		event.status === "running" ? event.body : (event.preview ?? event.body);
 	const summary = compactInline(summarySource, 72);
 	if (!summary || summary === title) {
 		return `${icon} ${event.tool} ${title}`;
@@ -125,7 +159,10 @@ function renderCursorExecWidget(): void {
 		return;
 	}
 
-	const lines = ["Cursor exec", ...execEvents.slice(-MAX_EXEC_WIDGET_EVENTS).map(formatCursorExecEvent)];
+	const lines = [
+		"Cursor exec",
+		...execEvents.slice(-MAX_EXEC_WIDGET_EVENTS).map(formatCursorExecEvent),
+	];
 	execUi.setWidget(EXEC_WIDGET_KEY, lines);
 }
 
@@ -143,7 +180,11 @@ function recordCursorExecEvent(event: CursorExecUiMessage): void {
 	if (event.status !== "running") {
 		for (let i = execEvents.length - 1; i >= 0; i--) {
 			const existing = execEvents[i];
-			if (existing.status === "running" && existing.tool === event.tool && existing.title === event.title) {
+			if (
+				existing.status === "running" &&
+				existing.tool === event.tool &&
+				existing.title === event.title
+			) {
 				execEvents[i] = event;
 				renderCursorExecWidget();
 				return;
@@ -160,7 +201,12 @@ function recordCursorExecEvent(event: CursorExecUiMessage): void {
 
 function refreshCursorExecBridge(ctx: ExtensionContext): void {
 	setCursorExecBridge(createCursorExecBridge(ctx.cwd));
-	ctx.ui.setStatus(STATUS_KEY, ctx.model?.provider === PROVIDER_NAME ? "Cursor exec bridge active" : undefined);
+	ctx.ui.setStatus(
+		STATUS_KEY,
+		ctx.model?.provider === PROVIDER_NAME
+			? "Cursor exec bridge active"
+			: undefined,
+	);
 }
 
 function activateCursorSession(ctx: ExtensionContext): void {
@@ -177,14 +223,16 @@ export default function (pi: ExtensionAPI) {
 	});
 
 	pi.registerCommand("cursor-sync-models", {
-		description: "Fetch the current model list from Cursor and refresh the provider",
+		description:
+			"Fetch the current model list from Cursor and refresh the provider",
 		handler: async (_args, ctx) => {
 			await syncCursorModels(pi, ctx);
 		},
 	});
 
 	pi.registerCommand("cursor-reset-conversation", {
-		description: "Reset the cached Cursor conversation state for the current pi session",
+		description:
+			"Reset the cached Cursor conversation state for the current pi session",
 		handler: async (_args, ctx) => {
 			resetCursorConversation();
 			ctx.ui.notify("Reset Cursor conversation state.", "info");

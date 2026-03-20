@@ -1,7 +1,10 @@
 import * as http2 from "node:http2";
 import { create, fromBinary, toBinary } from "@bufbuild/protobuf";
 import type { ProviderModelConfig } from "@mariozechner/pi-coding-agent";
-import { GetUsableModelsRequestSchema, GetUsableModelsResponseSchema } from "./cursor-gen/agent_pb";
+import {
+	GetUsableModelsRequestSchema,
+	GetUsableModelsResponseSchema,
+} from "./cursor-gen/agent_pb";
 
 export const CURSOR_DEFAULT_BASE_URL = "https://api2.cursor.sh";
 const CURSOR_DEFAULT_CLIENT_VERSION = "cli-2026.02.13-41ac335";
@@ -141,9 +144,14 @@ export async function fetchCursorUsableModels(
 	options: CursorModelDiscoveryOptions,
 ): Promise<ProviderModelConfig[] | null> {
 	const timeoutMs = options.timeoutMs ?? 5000;
-	const requestPayload = create(GetUsableModelsRequestSchema, { customModelIds: [] });
+	const requestPayload = create(GetUsableModelsRequestSchema, {
+		customModelIds: [],
+	});
 	const body = toBinary(GetUsableModelsRequestSchema, requestPayload);
-	const baseUrl = (options.baseUrl ?? CURSOR_DEFAULT_BASE_URL).replace(/\/+$/, "");
+	const baseUrl = (options.baseUrl ?? CURSOR_DEFAULT_BASE_URL).replace(
+		/\/+$/,
+		"",
+	);
 	const responseBuffer = await fetchViaHttp2(baseUrl, body, options, timeoutMs);
 	if (!responseBuffer) {
 		return null;
@@ -156,7 +164,7 @@ export async function fetchCursorUsableModels(
 
 	const references = new Map(FALLBACK_MODELS.map((model) => [model.id, model]));
 	const byId = new Map<string, ProviderModelConfig>();
-	for (const rawModel of decoded.models) {
+	for (const rawModel of decoded.models!) {
 		const normalized = normalizeCursorModel(rawModel, references);
 		if (normalized) {
 			byId.set(normalized.id, normalized);
@@ -182,22 +190,39 @@ function normalizeCursorModel(
 	const reference = references.get(id);
 	const name = pickModelDisplayName(model, id);
 	const input = reference?.input ?? inferInputTypes(id, name);
-	const reasoning = typeof model.thinkingDetails !== "undefined" ? true : (reference?.reasoning ?? inferReasoning(id, name));
+	const reasoning =
+		typeof model.thinkingDetails !== "undefined"
+			? true
+			: (reference?.reasoning ?? inferReasoning(id, name));
 
 	return {
 		id,
 		name,
 		reasoning,
 		input,
-		cost: reference?.cost ?? { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+		cost: reference?.cost ?? {
+			input: 0,
+			output: 0,
+			cacheRead: 0,
+			cacheWrite: 0,
+		},
 		contextWindow: reference?.contextWindow ?? DEFAULT_CONTEXT_WINDOW,
 		maxTokens: reference?.maxTokens ?? DEFAULT_MAX_TOKENS,
 	};
 }
 
-function pickModelDisplayName(model: CursorModelDetailsLike, fallbackId: string): string {
+function pickModelDisplayName(
+	model: CursorModelDetailsLike,
+	fallbackId: string,
+): string {
 	const aliases = Array.isArray(model.aliases) ? model.aliases : [];
-	const candidates = [model.displayName, model.displayNameShort, model.displayModelId, ...aliases, fallbackId];
+	const candidates = [
+		model.displayName,
+		model.displayNameShort,
+		model.displayModelId,
+		...aliases,
+		fallbackId,
+	];
 	for (const candidate of candidates) {
 		if (typeof candidate !== "string") {
 			continue;
@@ -212,7 +237,13 @@ function pickModelDisplayName(model: CursorModelDetailsLike, fallbackId: string)
 
 function inferInputTypes(id: string, name: string): Array<"text" | "image"> {
 	const haystack = `${id} ${name}`.toLowerCase();
-	if (haystack.includes("vision") || haystack.includes("vl") || haystack.includes("gemini") || haystack.includes("gpt") || haystack.includes("claude")) {
+	if (
+		haystack.includes("vision") ||
+		haystack.includes("vl") ||
+		haystack.includes("gemini") ||
+		haystack.includes("gpt") ||
+		haystack.includes("claude")
+	) {
 		return ["text", "image"];
 	}
 	return ["text"];
@@ -220,16 +251,27 @@ function inferInputTypes(id: string, name: string): Array<"text" | "image"> {
 
 function inferReasoning(id: string, name: string): boolean {
 	const haystack = `${id} ${name}`.toLowerCase();
-	return haystack.includes("thinking") || haystack.includes("reason") || haystack.includes("opus") || haystack.includes("pro") || haystack.includes("gpt-5") || haystack.includes("grok") || haystack.includes("kimi");
+	return (
+		haystack.includes("thinking") ||
+		haystack.includes("reason") ||
+		haystack.includes("opus") ||
+		haystack.includes("pro") ||
+		haystack.includes("gpt-5") ||
+		haystack.includes("grok") ||
+		haystack.includes("kimi")
+	);
 }
 
-function buildRequestHeaders(options: CursorModelDiscoveryOptions): Record<string, string> {
+function buildRequestHeaders(
+	options: CursorModelDiscoveryOptions,
+): Record<string, string> {
 	return {
 		"content-type": "application/proto",
 		te: "trailers",
 		authorization: `Bearer ${options.apiKey}`,
 		"x-ghost-mode": "true",
-		"x-cursor-client-version": options.clientVersion ?? CURSOR_DEFAULT_CLIENT_VERSION,
+		"x-cursor-client-version":
+			options.clientVersion ?? CURSOR_DEFAULT_CLIENT_VERSION,
 		"x-cursor-client-type": "cli",
 	};
 }
@@ -290,7 +332,9 @@ async function fetchViaHttp2(
 	return promise;
 }
 
-function decodeGetUsableModelsResponse(payload: Uint8Array): { models?: unknown[] } | null {
+function decodeGetUsableModelsResponse(
+	payload: Uint8Array,
+): { models?: unknown[] } | null {
 	if (payload.length === 0) {
 		return null;
 	}
@@ -298,7 +342,9 @@ function decodeGetUsableModelsResponse(payload: Uint8Array): { models?: unknown[
 	const framedBody = decodeConnectUnaryBody(payload);
 	const body = framedBody ?? payload;
 	try {
-		return fromBinary(GetUsableModelsResponseSchema, body) as { models?: unknown[] };
+		return fromBinary(GetUsableModelsResponseSchema, body) as {
+			models?: unknown[];
+		};
 	} catch {
 		return null;
 	}
@@ -312,7 +358,11 @@ function decodeConnectUnaryBody(payload: Uint8Array): Uint8Array | null {
 	let offset = 0;
 	while (offset + 5 <= payload.length) {
 		const flags = payload[offset];
-		const view = new DataView(payload.buffer, payload.byteOffset + offset, payload.byteLength - offset);
+		const view = new DataView(
+			payload.buffer,
+			payload.byteOffset + offset,
+			payload.byteLength - offset,
+		);
 		const messageLength = view.getUint32(1, false);
 		const frameEnd = offset + 5 + messageLength;
 		if (frameEnd > payload.length) {

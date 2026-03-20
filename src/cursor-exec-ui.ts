@@ -1,4 +1,9 @@
-export type CursorExecUiStatus = "running" | "success" | "error" | "rejected" | "info";
+export type CursorExecUiStatus =
+	| "running"
+	| "success"
+	| "error"
+	| "rejected"
+	| "info";
 
 export interface CursorExecUiMessage {
 	tool: string;
@@ -10,12 +15,17 @@ export interface CursorExecUiMessage {
 	timestamp: number;
 }
 
-let currentCursorExecUiSink: ((message: CursorExecUiMessage) => void) | null = null;
+let currentCursorExecUiSink: ((message: CursorExecUiMessage) => void) | null =
+	null;
 
-export function setCursorExecUiSink(sink: ((message: CursorExecUiMessage) => void) | null): void {
+export function setCursorExecUiSink(
+	sink: ((message: CursorExecUiMessage) => void) | null,
+): void {
 	currentCursorExecUiSink = sink;
 }
 
-export function emitCursorExecUi(message: Omit<CursorExecUiMessage, "timestamp">): void {
+export function emitCursorExecUi(
+	message: Omit<CursorExecUiMessage, "timestamp">,
+): void {
 	currentCursorExecUiSink?.({ ...message, timestamp: Date.now() });
 }

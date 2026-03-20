@@ -1,4 +1,7 @@
-import type { OAuthCredentials, OAuthLoginCallbacks } from "@mariozechner/pi-ai";
+import type {
+	OAuthCredentials,
+	OAuthLoginCallbacks,
+} from "@mariozechner/pi-ai";
 
 const CURSOR_LOGIN_URL = "https://cursor.com/loginDeepControl";
 const CURSOR_POLL_URL = "https://api2.cursor.sh/auth/poll";
@@ -16,7 +19,10 @@ export interface CursorAuthParams {
 	loginUrl: string;
 }
 
-async function generatePKCE(): Promise<{ verifier: string; challenge: string }> {
+async function generatePKCE(): Promise<{
+	verifier: string;
+	challenge: string;
+}> {
 	const array = new Uint8Array(32);
 	crypto.getRandomValues(array);
 	const verifier = btoa(String.fromCharCode(...array))
@@ -24,7 +30,10 @@ async function generatePKCE(): Promise<{ verifier: string; challenge: string }> 
 		.replace(/\//g, "_")
 		.replace(/=+$/, "");
 
-	const hash = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(verifier));
+	const hash = await crypto.subtle.digest(
+		"SHA-256",
+		new TextEncoder().encode(verifier),
+	);
 	const challenge = btoa(String.fromCharCode(...new Uint8Array(hash)))
 		.replace(/\+/g, "-")
 		.replace(/\//g, "_")
@@ -68,13 +77,19 @@ export async function pollCursorAuth(
 		await sleep(delay, signal);
 
 		try {
-			const response = await fetch(`${CURSOR_POLL_URL}?uuid=${encodeURIComponent(uuid)}&verifier=${encodeURIComponent(verifier)}`, {
-				signal,
-			});
+			const response = await fetch(
+				`${CURSOR_POLL_URL}?uuid=${encodeURIComponent(uuid)}&verifier=${encodeURIComponent(verifier)}`,
+				{
+					signal,
+				},
+			);
 
 			if (response.status === 404) {
 				consecutiveErrors = 0;
-				delay = Math.min(Math.round(delay * POLL_BACKOFF_MULTIPLIER), POLL_MAX_DELAY);
+				delay = Math.min(
+					Math.round(delay * POLL_BACKOFF_MULTIPLIER),
+					POLL_MAX_DELAY,
+				);
 				continue;
 			}
 
@@ -97,7 +112,9 @@ export async function pollCursorAuth(
 			consecutiveErrors += 1;
 			if (consecutiveErrors >= 3) {
 				const message = error instanceof Error ? error.message : String(error);
-				throw new Error(`Too many consecutive errors during Cursor auth polling: ${message}`);
+				throw new Error(
+					`Too many consecutive errors during Cursor auth polling: ${message}`,
+				);
 			}
 		}
 	}
@@ -105,16 +122,23 @@ export async function pollCursorAuth(
 	throw new Error("Cursor authentication polling timeout");
 }
 
-export async function loginCursor(callbacks: OAuthLoginCallbacks): Promise<OAuthCredentials> {
+export async function loginCursor(
+	callbacks: OAuthLoginCallbacks,
+): Promise<OAuthCredentials> {
 	const { verifier, uuid, loginUrl } = await generateCursorAuthParams();
 
 	callbacks.onAuth({
 		url: loginUrl,
-		instructions: "Approve the Cursor login in your browser. This flow polls automatically.",
+		instructions:
+			"Approve the Cursor login in your browser. This flow polls automatically.",
 	});
 	callbacks.onProgress?.("Waiting for Cursor authentication...");
 
-	const { accessToken, refreshToken } = await pollCursorAuth(uuid, verifier, callbacks.signal);
+	const { accessToken, refreshToken } = await pollCursorAuth(
+		uuid,
+		verifier,
+		callbacks.signal,
+	);
 	return {
 		refresh: refreshToken,
 		access: accessToken,
@@ -122,8 +146,13 @@ export async function loginCursor(callbacks: OAuthLoginCallbacks): Promise<OAuth
 	};
 }
 
-export async function refreshCursorToken(credentials: OAuthCredentials): Promise<OAuthCredentials> {
-	const bearer = typeof credentials.refresh === "string" && credentials.refresh.length > 0 ? credentials.refresh : credentials.access;
+export async function refreshCursorToken(
+	credentials: OAuthCredentials,
+): Promise<OAuthCredentials> {
+	const bearer =
+		typeof credentials.refresh === "string" && credentials.refresh.length > 0
+			? credentials.refresh
+			: credentials.access;
 	const response = await fetch(CURSOR_REFRESH_URL, {
 		method: "POST",
 		headers: {
@@ -150,13 +179,21 @@ export async function refreshCursorToken(credentials: OAuthCredentials): Promise
 	};
 }
 
-export function isCursorTokenExpiringSoon(token: string, thresholdSeconds = 300): boolean {
+export function isCursorTokenExpiringSoon(
+	token: string,
+	thresholdSeconds = 300,
+): boolean {
 	try {
 		const [, payload] = token.split(".");
 		if (!payload) return true;
-		const decoded = JSON.parse(atob(payload.replace(/-/g, "+").replace(/_/g, "/"))) as { exp?: number };
+		const decoded = JSON.parse(
+			atob(payload.replace(/-/g, "+").replace(/_/g, "/")),
+		) as { exp?: number };
 		const currentTime = Math.floor(Date.now() / 1000);
-		return typeof decoded.exp !== "number" || decoded.exp - currentTime < thresholdSeconds;
+		return (
+			typeof decoded.exp !== "number" ||
+			decoded.exp - currentTime < thresholdSeconds
+		);
 	} catch {
 		return true;
 	}
@@ -168,7 +205,9 @@ function getTokenExpiry(token: string): number {
 		if (!payload) {
 			return Date.now() + 3600 * 1000;
 		}
-		const decoded = JSON.parse(atob(payload.replace(/-/g, "+").replace(/_/g, "/"))) as { exp?: number };
+		const decoded = JSON.parse(
+			atob(payload.replace(/-/g, "+").replace(/_/g, "/")),
+		) as { exp?: number };
 		if (typeof decoded.exp === "number") {
 			return decoded.exp * 1000 - 5 * 60 * 1000;
 		}
