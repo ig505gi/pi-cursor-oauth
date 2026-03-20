@@ -1,5 +1,8 @@
 # pi-cursor-oauth
 
+[![Version](https://img.shields.io/github/v/tag/kenryu42/pi-cursor-oauth?label=version&color=blue)](https://github.com/kenryu42/pi-cursor-oauth)
+[![License: MIT](https://img.shields.io/badge/License-MIT-red.svg)](https://opensource.org/licenses/MIT)
+
 > [!WARNING]
 > This extension is vibe coded by ~~copying~~ referencing [oh-my-pi](https://github.com/can1357/oh-my-pi) implementation.
 
