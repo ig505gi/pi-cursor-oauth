@@ -19,6 +19,16 @@ export interface CursorAuthParams {
 	loginUrl: string;
 }
 
+export interface CursorAuthRuntime {
+	fetch: typeof fetch;
+	sleep: (ms: number, signal?: AbortSignal) => Promise<void>;
+}
+
+const defaultCursorAuthRuntime: CursorAuthRuntime = {
+	fetch,
+	sleep,
+};
+
 async function generatePKCE(): Promise<{
 	verifier: string;
 	challenge: string;
@@ -65,6 +75,7 @@ export async function pollCursorAuth(
 	uuid: string,
 	verifier: string,
 	signal?: AbortSignal,
+	runtime: CursorAuthRuntime = defaultCursorAuthRuntime,
 ): Promise<{ accessToken: string; refreshToken: string }> {
 	let delay = POLL_BASE_DELAY;
 	let consecutiveErrors = 0;
@@ -74,10 +85,10 @@ export async function pollCursorAuth(
 			throw new Error("Cursor authentication cancelled");
 		}
 
-		await sleep(delay, signal);
+		await runtime.sleep(delay, signal);
 
 		try {
-			const response = await fetch(
+			const response = await runtime.fetch(
 				`${CURSOR_POLL_URL}?uuid=${encodeURIComponent(uuid)}&verifier=${encodeURIComponent(verifier)}`,
 				{
 					signal,
@@ -124,6 +135,7 @@ export async function pollCursorAuth(
 
 export async function loginCursor(
 	callbacks: OAuthLoginCallbacks,
+	runtime: CursorAuthRuntime = defaultCursorAuthRuntime,
 ): Promise<OAuthCredentials> {
 	const { verifier, uuid, loginUrl } = await generateCursorAuthParams();
 
@@ -138,6 +150,7 @@ export async function loginCursor(
 		uuid,
 		verifier,
 		callbacks.signal,
+		runtime,
 	);
 	return {
 		refresh: refreshToken,
