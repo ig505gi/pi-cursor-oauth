@@ -208,7 +208,10 @@ export async function handleExecServerMessage(
 
 		if (execCase === "readArgs") {
 			const args = execMsg.message.value;
-			emitExecStart("read", args.path);
+			emitExecStart("read", args.path, undefined, {
+				path: args.path,
+				cwd: activeBridge.cwd,
+			});
 			const execution = await executeTool(
 				activeBridge.readTool,
 				args.toolCallId,
@@ -222,6 +225,7 @@ export async function handleExecServerMessage(
 				execution.isError
 					? undefined
 					: previewText(getPrimaryText(execution.result)),
+				{ path: args.path, cwd: activeBridge.cwd },
 			);
 			sendFinalExecClientMessage(
 				"readResult",
@@ -232,7 +236,10 @@ export async function handleExecServerMessage(
 
 		if (execCase === "lsArgs") {
 			const args = execMsg.message.value;
-			emitExecStart("ls", args.path || ".");
+			emitExecStart("ls", args.path || ".", undefined, {
+				path: args.path || ".",
+				cwd: activeBridge.cwd,
+			});
 			const execution = await executeTool(
 				activeBridge.lsTool,
 				args.toolCallId,
@@ -246,6 +253,7 @@ export async function handleExecServerMessage(
 				execution.isError
 					? undefined
 					: previewText(getPrimaryText(execution.result)),
+				{ path: args.path || ".", cwd: activeBridge.cwd },
 			);
 			sendFinalExecClientMessage(
 				"lsResult",
@@ -256,13 +264,24 @@ export async function handleExecServerMessage(
 
 		if (execCase === "writeArgs") {
 			const args = execMsg.message.value;
-			emitExecStart("write", args.path, `${countLines(args.fileText)} line(s)`);
+			emitExecStart(
+				"write",
+				args.path,
+				`${countLines(args.fileText)} line(s)`,
+				{
+					path: args.path,
+					content: args.fileText,
+					cwd: activeBridge.cwd,
+				},
+			);
 			if (args.fileBytes.length > 0) {
 				emitExecDone(
 					"write",
 					args.path,
 					"rejected",
 					"Binary file writes via fileBytes are not supported by this extension yet.",
+					undefined,
+					{ path: args.path, content: args.fileText, cwd: activeBridge.cwd },
 				);
 				sendFinalExecClientMessage(
 					"writeResult",
@@ -297,6 +316,7 @@ export async function handleExecServerMessage(
 				args.returnFileContentAfterWrite
 					? previewText(args.fileText)
 					: undefined,
+				{ path: args.path, content: args.fileText, cwd: activeBridge.cwd },
 			);
 			sendFinalExecClientMessage(
 				"writeResult",
@@ -312,7 +332,10 @@ export async function handleExecServerMessage(
 
 		if (execCase === "deleteArgs") {
 			const args = execMsg.message.value;
-			emitExecStart("delete", args.path);
+			emitExecStart("delete", args.path, undefined, {
+				path: args.path,
+				cwd: activeBridge.cwd,
+			});
 			const deleteResult = buildDeleteResult(args.path, activeBridge.cwd);
 			emitExecDone(
 				"delete",
@@ -328,6 +351,7 @@ export async function handleExecServerMessage(
 				deleteResult.result.case === "success"
 					? previewText(deleteResult.result.value.prevContent)
 					: undefined,
+				{ path: args.path, cwd: activeBridge.cwd },
 			);
 			sendFinalExecClientMessage("deleteResult", deleteResult);
 			return;
@@ -339,7 +363,11 @@ export async function handleExecServerMessage(
 				args.workingDirectory || ".",
 				activeBridge.cwd,
 			);
-			emitExecStart("shell", args.command, `cwd: ${resolvedCwd}`);
+			emitExecStart("shell", args.command, `cwd: ${resolvedCwd}`, {
+				command: args.command,
+				timeout: args.timeout,
+				cwd: resolvedCwd,
+			});
 			const bashTool = createBashTool(resolvedCwd);
 			const startedAt = Date.now();
 			const execution = await executeTool(bashTool, args.toolCallId, {
@@ -356,6 +384,12 @@ export async function handleExecServerMessage(
 						? execution.error
 						: getPrimaryText(execution.result),
 				),
+				{
+					command: args.command,
+					timeout: args.timeout,
+					cwd: resolvedCwd,
+					fullOutputPath: execution.result?.details?.fullOutputPath,
+				},
 			);
 			sendFinalExecClientMessage(
 				"shellResult",
@@ -376,7 +410,11 @@ export async function handleExecServerMessage(
 				args.workingDirectory || ".",
 				activeBridge.cwd,
 			);
-			emitExecStart("shellStream", args.command, `cwd: ${resolvedCwd}`);
+			emitExecStart("shellStream", args.command, `cwd: ${resolvedCwd}`, {
+				command: args.command,
+				timeout: args.timeout,
+				cwd: resolvedCwd,
+			});
 			const streamResult = await streamShellCommand(
 				execMsg,
 				args.command,
@@ -397,6 +435,12 @@ export async function handleExecServerMessage(
 				streamResult.outputFilePath
 					? `Output saved to ${streamResult.outputFilePath}`
 					: undefined,
+				{
+					command: args.command,
+					timeout: args.timeout,
+					cwd: resolvedCwd,
+					outputFilePath: streamResult.outputFilePath,
+				},
 			);
 			closeExecStream();
 			return;
@@ -404,7 +448,12 @@ export async function handleExecServerMessage(
 
 		if (execCase === "grepArgs") {
 			const args = execMsg.message.value;
-			emitExecStart("grep", args.pattern, args.path || ".");
+			emitExecStart("grep", args.pattern, args.path || ".", {
+				pattern: args.pattern,
+				path: args.path || ".",
+				glob: args.glob,
+				cwd: activeBridge.cwd,
+			});
 			const grepResult = await buildGrepResult(args, activeBridge.cwd);
 			emitExecDone(
 				"grep",
@@ -414,6 +463,12 @@ export async function handleExecServerMessage(
 				grepResult.result.case === "success"
 					? summarizeGrepResult(grepResult)
 					: grepResult.result.value?.error,
+				{
+					pattern: args.pattern,
+					path: args.path || ".",
+					glob: args.glob,
+					cwd: activeBridge.cwd,
+				},
 			);
 			sendFinalExecClientMessage("grepResult", grepResult);
 			return;
@@ -1660,10 +1715,36 @@ function frameConnectMessage(data: Uint8Array, flags = 0): Buffer {
 
 function resolveToCwd(filePath: string, cwd: string): string {
 	const expanded = expandPath(filePath);
+	if (expanded === "/") {
+		return cwd;
+	}
 	if (path.isAbsolute(expanded)) {
-		return expanded;
+		if (expanded === cwd || expanded.startsWith(`${cwd}${path.sep}`)) {
+			return expanded;
+		}
+		if (isLikelySystemAbsolutePath(expanded)) {
+			return expanded;
+		}
+		return path.join(cwd, expanded.slice(1));
 	}
 	return path.resolve(cwd, expanded);
+}
+
+function isLikelySystemAbsolutePath(filePath: string): boolean {
+	const normalized = filePath.replace(/\\/g, "/");
+	return [
+		"/tmp/",
+		"/var/",
+		"/etc/",
+		"/usr/",
+		"/bin/",
+		"/sbin/",
+		"/opt/",
+		"/private/",
+		"/dev/",
+		"/Users/",
+		"/home/",
+	].some((prefix) => normalized.startsWith(prefix));
 }
 
 function expandPath(filePath: string): string {
