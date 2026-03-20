@@ -24,10 +24,12 @@ export interface CursorAuthRuntime {
 	sleep: (ms: number, signal?: AbortSignal) => Promise<void>;
 }
 
-const defaultCursorAuthRuntime: CursorAuthRuntime = {
-	fetch,
-	sleep,
-};
+function getDefaultCursorAuthRuntime(): CursorAuthRuntime {
+	return {
+		fetch: globalThis.fetch,
+		sleep,
+	};
+}
 
 async function generatePKCE(): Promise<{
 	verifier: string;
@@ -75,7 +77,7 @@ export async function pollCursorAuth(
 	uuid: string,
 	verifier: string,
 	signal?: AbortSignal,
-	runtime: CursorAuthRuntime = defaultCursorAuthRuntime,
+	runtime: CursorAuthRuntime = getDefaultCursorAuthRuntime(),
 ): Promise<{ accessToken: string; refreshToken: string }> {
 	let delay = POLL_BASE_DELAY;
 	let consecutiveErrors = 0;
@@ -135,7 +137,7 @@ export async function pollCursorAuth(
 
 export async function loginCursor(
 	callbacks: OAuthLoginCallbacks,
-	runtime: CursorAuthRuntime = defaultCursorAuthRuntime,
+	runtime: CursorAuthRuntime = getDefaultCursorAuthRuntime(),
 ): Promise<OAuthCredentials> {
 	const { verifier, uuid, loginUrl } = await generateCursorAuthParams();
 
