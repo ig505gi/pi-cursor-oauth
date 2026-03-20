@@ -1,23 +1,79 @@
 {
-  "name": "pi-cursor-oauth",
-  "version": "0.1.0",
-  "private": true,
-  "type": "module",
-  "keywords": ["pi-package"],
-  "peerDependencies": {
-    "@mariozechner/pi-ai": "*",
-    "@mariozechner/pi-coding-agent": "*"
-  },
-  "dependencies": {
-    "@bufbuild/protobuf": "^2.10.2"
-  },
-  "pi": {
-    "extensions": ["./src/index.ts"]
-  },
-  "devDependencies": {
-    "biomejs": "^0.0.0",
-    "husky": "^9.1.7",
-    "knip": "^5.88.1",
-    "lint-staged": "^16.4.0"
-  }
+	"name": "pi-cursor-oauth",
+	"version": "0.0.1",
+	"description": "Cursor OAuth provider extension for pi-coding-agent",
+	"main": "dist/index.js",
+	"types": "dist/index.d.ts",
+	"type": "module",
+	"exports": {
+		".": {
+			"types": "./dist/index.d.ts",
+			"default": "./dist/index.js"
+		}
+	},
+	"files": [
+		"dist/index.js",
+		"dist/index.d.ts"
+	],
+	"scripts": {
+		"build": "bun run clean && bun build src/index.ts --outdir dist --target node --format esm --external @bufbuild/protobuf --external @mariozechner/pi-ai --external @mariozechner/pi-coding-agent && tsc -p tsconfig.build.json",
+		"build:types": "tsc -p tsconfig.build.json",
+		"clean": "rm -rf dist",
+		"check": "bun run lint && bun run typecheck && bun run knip",
+		"lint": "biome check --write",
+		"lint:ci": "biome ci .",
+		"typecheck": "tsc --noEmit",
+		"knip": "knip --production",
+		"prepack": "npm run build",
+		"prepare": "husky"
+	},
+	"lint-staged": {
+		"*": [
+			"biome check --write --no-errors-on-unmatched"
+		]
+	},
+	"knip": {
+		"entry": [
+			"src/index.ts"
+		],
+		"exclude": [
+			"exports",
+			"types"
+		]
+	},
+	"keywords": [
+		"pi-package"
+	],
+	"author": {
+		"name": "J Liew",
+		"email": "jliew@420024lab.com"
+	},
+	"license": "MIT",
+	"repository": {
+		"type": "git",
+		"url": "git+https://github.com/kenryu42/pi-cursor-oauth.git"
+	},
+	"bugs": {
+		"url": "https://github.com/kenryu42/pi-cursor-oauth/issues"
+	},
+	"homepage": "https://github.com/kenryu42/pi-cursor-oauth#readme",
+	"peerDependencies": {
+		"@mariozechner/pi-ai": "*",
+		"@mariozechner/pi-coding-agent": "*"
+	},
+	"dependencies": {
+		"@bufbuild/protobuf": "^2.10.2"
+	},
+	"devDependencies": {
+		"@biomejs/biome": "2.3.10",
+		"@types/bun": "latest",
+		"husky": "^9.1.7",
+		"knip": "^5.88.1",
+		"lint-staged": "^16.4.0"
+	},
+	"pi": {
+		"extensions": [
+			"./dist/index.js"
+		]
+	}
 }
