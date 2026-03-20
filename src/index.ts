@@ -7,9 +7,6 @@ import {
 	createCursorExecBridge,
 	setCursorExecBridge,
 } from "./cursor-exec-bridge";
-import type { CursorExecUiMessage } from "./cursor-exec-ui";
-import { setCursorExecUiSink } from "./cursor-exec-ui";
-import { createCursorExecWidget } from "./cursor-exec-widget";
 import {
 	CURSOR_DEFAULT_BASE_URL,
 	FALLBACK_MODELS,
@@ -17,18 +14,14 @@ import {
 } from "./cursor-models";
 import { loginCursor, refreshCursorToken } from "./cursor-oauth";
 import { resetCursorConversation, streamCursorChat } from "./cursor-provider";
+import { installPiNativeToolHack } from "./pi-native-tool-hack";
 
 const PROVIDER_NAME = "cursor";
 const PROVIDER_API = "cursor-chat-api";
 const STATUS_KEY = "cursor-oauth";
-const EXEC_WIDGET_KEY = "cursor-exec";
-const MAX_EXEC_WIDGET_RUNNING_EVENTS = 2;
-const MAX_EXEC_EVENTS_HISTORY = 20;
 
 let activeModels: ProviderModelConfig[] = FALLBACK_MODELS;
 let syncInFlight: Promise<boolean> | null = null;
-let execUi: ExtensionContext["ui"] | null = null;
-let execEvents: CursorExecUiMessage[] = [];
 
 function registerCursorProvider(
 	pi: ExtensionAPI,
@@ -99,101 +92,20 @@ async function syncCursorModels(
 	}
 }
 
-function getVisibleCursorExecEvents(): CursorExecUiMessage[] {
-	const running = execEvents.filter((event) => event.status === "running");
-	if (running.length > 0) {
-		const completed = execEvents.filter((event) => event.status !== "running");
-		const latestCompleted = completed.at(-1);
-		return [
-			...running.slice(-MAX_EXEC_WIDGET_RUNNING_EVENTS),
-			...(latestCompleted ? [latestCompleted] : []),
-		];
-	}
-	const latestCompleted = execEvents.at(-1);
-	return latestCompleted ? [latestCompleted] : [];
-}
-
-function renderCursorExecWidget(): void {
-	if (!execUi) {
-		return;
-	}
-	const visibleEvents = getVisibleCursorExecEvents();
-	if (visibleEvents.length === 0) {
-		execUi.setWidget(EXEC_WIDGET_KEY, undefined);
-		return;
-	}
-
-	execUi.setWidget(EXEC_WIDGET_KEY, createCursorExecWidget(visibleEvents), {
-		placement: "belowEditor",
-	});
-}
-
-function bindCursorExecUi(ctx: ExtensionContext): void {
-	execUi = ctx.hasUI ? ctx.ui : null;
-	renderCursorExecWidget();
-}
-
-function resetCursorExecUi(): void {
-	execEvents = [];
-	execUi?.setWidget(EXEC_WIDGET_KEY, undefined);
-}
-
-function recordCursorExecEvent(event: CursorExecUiMessage): void {
-	if (event.status !== "running") {
-		for (let i = execEvents.length - 1; i >= 0; i--) {
-			const existing = execEvents[i];
-			if (
-				existing.status === "running" &&
-				existing.tool === event.tool &&
-				existing.title === event.title
-			) {
-				execEvents[i] = event;
-				renderCursorExecWidget();
-				return;
-			}
-		}
-	}
-
-	execEvents.push(event);
-	if (execEvents.length > MAX_EXEC_EVENTS_HISTORY) {
-		execEvents = execEvents.slice(-MAX_EXEC_EVENTS_HISTORY);
-	}
-	renderCursorExecWidget();
-}
-
 function refreshCursorExecBridge(ctx: ExtensionContext): void {
 	setCursorExecBridge(createCursorExecBridge(ctx.cwd));
-	ctx.ui.setStatus(
-		STATUS_KEY,
-		ctx.model?.provider === PROVIDER_NAME
-			? "Cursor exec bridge active"
-			: undefined,
-	);
+	ctx.ui.setStatus(STATUS_KEY, undefined);
 }
 
 function activateCursorSession(ctx: ExtensionContext): void {
 	resetCursorConversation();
-	bindCursorExecUi(ctx);
-	resetCursorExecUi();
 	refreshCursorExecBridge(ctx);
 }
 
 export default function (pi: ExtensionAPI) {
 	registerCursorProvider(pi, activeModels);
-	setCursorExecUiSink((event) => {
-		recordCursorExecEvent(event);
-	});
-
-	pi.on("agent_start", async (_event, ctx) => {
-		if (ctx.model?.provider === PROVIDER_NAME) {
-			resetCursorExecUi();
-		}
-	});
-
-	pi.on("agent_end", async (_event, ctx) => {
-		if (ctx.model?.provider === PROVIDER_NAME && execEvents.length > 0) {
-			resetCursorExecUi();
-		}
+	void installPiNativeToolHack().catch(() => {
+		// Best-effort private API patch.
 	});
 
 	pi.registerCommand("cursor-sync-models", {
@@ -227,20 +139,13 @@ export default function (pi: ExtensionAPI) {
 	});
 
 	pi.on("model_select", async (_event, ctx) => {
-		bindCursorExecUi(ctx);
 		refreshCursorExecBridge(ctx);
 		if (ctx.model?.provider === PROVIDER_NAME) {
-			renderCursorExecWidget();
 			void syncCursorModels(pi, ctx, true);
-		} else {
-			ctx.ui.setWidget(EXEC_WIDGET_KEY, undefined);
 		}
 	});
 
 	pi.on("session_shutdown", async () => {
-		resetCursorExecUi();
 		setCursorExecBridge(null);
-		setCursorExecUiSink(null);
-		execUi = null;
 	});
 }
