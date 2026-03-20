@@ -11,7 +11,6 @@ import {
 	createReadTool,
 	createWriteTool,
 } from "@mariozechner/pi-coding-agent";
-import { emitCursorExecUi } from "./cursor-exec-ui";
 import {
 	AgentClientMessageSchema,
 	BackgroundShellSpawnErrorSchema,
@@ -90,6 +89,12 @@ import {
 	WriteShellStdinResultSchema,
 	WriteSuccessSchema,
 } from "./cursor-gen/agent_pb";
+import {
+	emitNativeToolExecutionEnd,
+	emitNativeToolExecutionStart,
+	emitNativeToolExecutionUpdate,
+	type NativeToolExecutionResult,
+} from "./pi-native-tool-hack";
 
 const MAX_INLINE_DELETE_PREVIEW_BYTES = 50 * 1024;
 
@@ -137,23 +142,92 @@ export function getCursorExecBridge(): CursorExecBridge | null {
 }
 
 function emitExecStart(
+	toolCallId: string,
 	tool: string,
-	title: string,
-	body?: string,
-	meta?: Record<string, unknown>,
+	args: Record<string, unknown>,
 ): void {
-	emitCursorExecUi({ tool, title, status: "running", body, meta });
+	emitNativeToolExecutionStart(toolCallId, mapCursorToolToPiTool(tool), args);
+}
+
+function emitExecUpdate(
+	toolCallId: string,
+	tool: string,
+	args: Record<string, unknown>,
+	partialResult: NativeToolExecutionResult,
+): void {
+	emitNativeToolExecutionUpdate(
+		toolCallId,
+		mapCursorToolToPiTool(tool),
+		args,
+		partialResult,
+	);
 }
 
 function emitExecDone(
+	toolCallId: string,
 	tool: string,
-	title: string,
-	status: "success" | "error" | "rejected",
-	body?: string,
-	preview?: string,
-	meta?: Record<string, unknown>,
+	result: NativeToolExecutionResult,
+	isError: boolean,
 ): void {
-	emitCursorExecUi({ tool, title, status, body, preview, meta });
+	emitNativeToolExecutionEnd(
+		toolCallId,
+		mapCursorToolToPiTool(tool),
+		result,
+		isError,
+	);
+}
+
+function mapCursorToolToPiTool(tool: string): string {
+	switch (tool) {
+		case "shell":
+		case "shellStream":
+			return "bash";
+		default:
+			return tool;
+	}
+}
+
+function createErrorToolResult(
+	message: string,
+	details?: Record<string, unknown>,
+): NativeToolExecutionResult {
+	return {
+		content: [{ type: "text", text: message }],
+		details,
+	};
+}
+
+function createTextToolResult(
+	text?: string,
+	details?: Record<string, unknown>,
+): NativeToolExecutionResult {
+	return {
+		content: text ? [{ type: "text", text }] : [],
+		details,
+	};
+}
+
+function buildExecutionToolResult(
+	execution: ToolExecution,
+	details?: Record<string, unknown>,
+): NativeToolExecutionResult {
+	if (execution.isError) {
+		return createErrorToolResult(
+			execution.error || "Tool execution failed",
+			details,
+		);
+	}
+	const result = execution.result ?? createTextToolResult();
+	if (!details) {
+		return result;
+	}
+	return {
+		...result,
+		details: {
+			...(result.details ?? {}),
+			...details,
+		},
+	};
 }
 
 export function handleExecServerControlMessage(
@@ -208,24 +282,17 @@ export async function handleExecServerMessage(
 
 		if (execCase === "readArgs") {
 			const args = execMsg.message.value;
-			emitExecStart("read", args.path, undefined, {
-				path: args.path,
-				cwd: activeBridge.cwd,
-			});
+			emitExecStart(args.toolCallId, "read", { path: args.path });
 			const execution = await executeTool(
 				activeBridge.readTool,
 				args.toolCallId,
 				{ path: args.path },
 			);
 			emitExecDone(
+				args.toolCallId,
 				"read",
-				args.path,
-				execution.isError ? "error" : "success",
-				execution.isError ? execution.error : "Read complete",
-				execution.isError
-					? undefined
-					: previewText(getPrimaryText(execution.result)),
-				{ path: args.path, cwd: activeBridge.cwd },
+				buildExecutionToolResult(execution),
+				execution.isError,
 			);
 			sendFinalExecClientMessage(
 				"readResult",
@@ -236,24 +303,17 @@ export async function handleExecServerMessage(
 
 		if (execCase === "lsArgs") {
 			const args = execMsg.message.value;
-			emitExecStart("ls", args.path || ".", undefined, {
-				path: args.path || ".",
-				cwd: activeBridge.cwd,
-			});
+			emitExecStart(args.toolCallId, "ls", { path: args.path || "." });
 			const execution = await executeTool(
 				activeBridge.lsTool,
 				args.toolCallId,
 				{ path: args.path },
 			);
 			emitExecDone(
+				args.toolCallId,
 				"ls",
-				args.path || ".",
-				execution.isError ? "error" : "success",
-				execution.isError ? execution.error : "Listed directory",
-				execution.isError
-					? undefined
-					: previewText(getPrimaryText(execution.result)),
-				{ path: args.path || ".", cwd: activeBridge.cwd },
+				buildExecutionToolResult(execution),
+				execution.isError,
 			);
 			sendFinalExecClientMessage(
 				"lsResult",
@@ -264,24 +324,18 @@ export async function handleExecServerMessage(
 
 		if (execCase === "writeArgs") {
 			const args = execMsg.message.value;
-			emitExecStart(
-				"write",
-				args.path,
-				`${countLines(args.fileText)} line(s)`,
-				{
-					path: args.path,
-					content: args.fileText,
-					cwd: activeBridge.cwd,
-				},
-			);
+			emitExecStart(args.toolCallId, "write", {
+				path: args.path,
+				content: args.fileText,
+			});
 			if (args.fileBytes.length > 0) {
 				emitExecDone(
+					args.toolCallId,
 					"write",
-					args.path,
-					"rejected",
-					"Binary file writes via fileBytes are not supported by this extension yet.",
-					undefined,
-					{ path: args.path, content: args.fileText, cwd: activeBridge.cwd },
+					createErrorToolResult(
+						"Binary file writes via fileBytes are not supported by this extension yet.",
+					),
+					true,
 				);
 				sendFinalExecClientMessage(
 					"writeResult",
@@ -307,16 +361,10 @@ export async function handleExecServerMessage(
 				},
 			);
 			emitExecDone(
+				args.toolCallId,
 				"write",
-				args.path,
-				execution.isError ? "error" : "success",
-				execution.isError
-					? execution.error
-					: `Wrote ${countLines(args.fileText)} line(s)`,
-				args.returnFileContentAfterWrite
-					? previewText(args.fileText)
-					: undefined,
-				{ path: args.path, content: args.fileText, cwd: activeBridge.cwd },
+				buildExecutionToolResult(execution),
+				execution.isError,
 			);
 			sendFinalExecClientMessage(
 				"writeResult",
@@ -332,26 +380,27 @@ export async function handleExecServerMessage(
 
 		if (execCase === "deleteArgs") {
 			const args = execMsg.message.value;
-			emitExecStart("delete", args.path, undefined, {
-				path: args.path,
-				cwd: activeBridge.cwd,
-			});
+			emitExecStart(args.toolCallId, "delete", { path: args.path });
 			const deleteResult = buildDeleteResult(args.path, activeBridge.cwd);
 			emitExecDone(
+				args.toolCallId,
 				"delete",
-				args.path,
 				deleteResult.result.case === "success"
-					? "success"
-					: deleteResult.result.case === "error"
-						? "error"
-						: "rejected",
-				deleteResult.result.case === "success"
-					? "File deleted"
-					: "Delete failed",
-				deleteResult.result.case === "success"
-					? previewText(deleteResult.result.value.prevContent)
-					: undefined,
-				{ path: args.path, cwd: activeBridge.cwd },
+					? createTextToolResult(deleteResult.result.value.prevContent)
+					: createErrorToolResult(
+							deleteResult.result.case === "error"
+								? deleteResult.result.value.error
+								: deleteResult.result.case === "fileNotFound"
+									? `File not found: ${args.path}`
+									: deleteResult.result.case === "permissionDenied"
+										? deleteResult.result.value.clientVisibleError
+										: deleteResult.result.case === "notFile"
+											? `Not a file: ${args.path}`
+											: deleteResult.result.case === "fileBusy"
+												? `File is busy: ${args.path}`
+												: `Delete rejected: ${args.path}`,
+						),
+				deleteResult.result.case !== "success",
 			);
 			sendFinalExecClientMessage("deleteResult", deleteResult);
 			return;
@@ -363,10 +412,9 @@ export async function handleExecServerMessage(
 				args.workingDirectory || ".",
 				activeBridge.cwd,
 			);
-			emitExecStart("shell", args.command, `cwd: ${resolvedCwd}`, {
+			emitExecStart(args.toolCallId, "shell", {
 				command: args.command,
 				timeout: args.timeout,
-				cwd: resolvedCwd,
 			});
 			const bashTool = createBashTool(resolvedCwd);
 			const startedAt = Date.now();
@@ -375,21 +423,12 @@ export async function handleExecServerMessage(
 				timeout: args.timeout > 0 ? args.timeout : undefined,
 			});
 			emitExecDone(
+				args.toolCallId,
 				"shell",
-				args.command,
-				execution.isError ? "error" : "success",
-				execution.isError ? execution.error : `cwd: ${resolvedCwd}`,
-				previewText(
-					execution.isError
-						? execution.error
-						: getPrimaryText(execution.result),
-				),
-				{
-					command: args.command,
-					timeout: args.timeout,
-					cwd: resolvedCwd,
+				buildExecutionToolResult(execution, {
 					fullOutputPath: execution.result?.details?.fullOutputPath,
-				},
+				}),
+				execution.isError,
 			);
 			sendFinalExecClientMessage(
 				"shellResult",
@@ -410,37 +449,33 @@ export async function handleExecServerMessage(
 				args.workingDirectory || ".",
 				activeBridge.cwd,
 			);
-			emitExecStart("shellStream", args.command, `cwd: ${resolvedCwd}`, {
+			const nativeArgs = {
 				command: args.command,
 				timeout: args.timeout,
-				cwd: resolvedCwd,
-			});
+			};
+			emitExecStart(args.toolCallId, "shellStream", nativeArgs);
 			const streamResult = await streamShellCommand(
 				execMsg,
+				args.toolCallId,
 				args.command,
 				resolvedCwd,
 				args.timeout,
 				args.fileOutputThresholdBytes,
 				sendExecClientMessage,
+				nativeArgs,
 			);
 			emitExecDone(
+				args.toolCallId,
 				"shellStream",
-				args.command,
-				streamResult.aborted || streamResult.exitCode !== 0
-					? "error"
-					: "success",
-				streamResult.aborted
-					? "Command aborted"
-					: `Exit code: ${streamResult.exitCode}`,
-				streamResult.outputFilePath
-					? `Output saved to ${streamResult.outputFilePath}`
-					: undefined,
-				{
-					command: args.command,
-					timeout: args.timeout,
-					cwd: resolvedCwd,
-					outputFilePath: streamResult.outputFilePath,
-				},
+				createTextToolResult(
+					streamResult.outputFilePath
+						? `Output saved to ${streamResult.outputFilePath}`
+						: streamResult.output,
+					streamResult.outputFilePath
+						? { fullOutputPath: streamResult.outputFilePath }
+						: undefined,
+				),
+				streamResult.aborted || streamResult.exitCode !== 0,
 			);
 			closeExecStream();
 			return;
@@ -448,27 +483,21 @@ export async function handleExecServerMessage(
 
 		if (execCase === "grepArgs") {
 			const args = execMsg.message.value;
-			emitExecStart("grep", args.pattern, args.path || ".", {
+			emitExecStart(args.toolCallId, "grep", {
 				pattern: args.pattern,
 				path: args.path || ".",
 				glob: args.glob,
-				cwd: activeBridge.cwd,
 			});
 			const grepResult = await buildGrepResult(args, activeBridge.cwd);
 			emitExecDone(
+				args.toolCallId,
 				"grep",
-				args.pattern,
-				grepResult.result.case === "success" ? "success" : "error",
-				args.path || ".",
 				grepResult.result.case === "success"
-					? summarizeGrepResult(grepResult)
-					: grepResult.result.value?.error,
-				{
-					pattern: args.pattern,
-					path: args.path || ".",
-					glob: args.glob,
-					cwd: activeBridge.cwd,
-				},
+					? createTextToolResult(summarizeGrepResult(grepResult))
+					: createErrorToolResult(
+							grepResult.result.value?.error || "grep failed",
+						),
+				grepResult.result.case !== "success",
 			);
 			sendFinalExecClientMessage("grepResult", grepResult);
 			return;
@@ -745,12 +774,19 @@ interface GrepContentCollection {
 
 async function streamShellCommand(
 	execMsg: ExecServerMessage,
+	toolCallId: string,
 	command: string,
 	workingDirectory: string,
 	timeoutSeconds: number,
 	fileOutputThresholdBytes: bigint | undefined,
 	sendExecClientMessage: ExecMessageSender,
-): Promise<{ exitCode: number; aborted: boolean; outputFilePath?: string }> {
+	nativeArgs: Record<string, unknown>,
+): Promise<{
+	exitCode: number;
+	aborted: boolean;
+	outputFilePath?: string;
+	output: string;
+}> {
 	if (!fs.existsSync(workingDirectory)) {
 		sendExecClientMessage(
 			execMsg,
@@ -767,7 +803,11 @@ async function streamShellCommand(
 				},
 			}),
 		);
-		return { exitCode: 1, aborted: false };
+		return {
+			exitCode: 1,
+			aborted: false,
+			output: `Working directory does not exist: ${workingDirectory}`,
+		};
 	}
 
 	try {
@@ -788,7 +828,11 @@ async function streamShellCommand(
 				},
 			}),
 		);
-		return { exitCode: 1, aborted: false };
+		return {
+			exitCode: 1,
+			aborted: false,
+			output: `Permission denied: ${workingDirectory}`,
+		};
 	}
 
 	const shellConfig = getShellConfig();
@@ -816,6 +860,7 @@ async function streamShellCommand(
 	let bufferedOutput: Buffer[] = [];
 	let outputFilePath: string | undefined;
 	let timedOut = false;
+	let accumulatedOutput = "";
 
 	const appendOutput = (chunk: Buffer) => {
 		totalOutputBytes += chunk.length;
@@ -838,6 +883,12 @@ async function streamShellCommand(
 
 	child.stdout?.on("data", (chunk: Buffer) => {
 		appendOutput(chunk);
+		accumulatedOutput += sanitizeShellText(chunk.toString("utf8"));
+		emitExecUpdate(toolCallId, "shellStream", nativeArgs, {
+			content: accumulatedOutput
+				? [{ type: "text", text: accumulatedOutput }]
+				: [],
+		});
 		sendExecClientMessage(
 			execMsg,
 			"shellStream",
@@ -854,6 +905,12 @@ async function streamShellCommand(
 
 	child.stderr?.on("data", (chunk: Buffer) => {
 		appendOutput(chunk);
+		accumulatedOutput += sanitizeShellText(chunk.toString("utf8"));
+		emitExecUpdate(toolCallId, "shellStream", nativeArgs, {
+			content: accumulatedOutput
+				? [{ type: "text", text: accumulatedOutput }]
+				: [],
+		});
 		sendExecClientMessage(
 			execMsg,
 			"shellStream",
@@ -879,6 +936,13 @@ async function streamShellCommand(
 	const exitCode = await new Promise<number>((resolve) => {
 		child.on("error", (error) => {
 			activeShellStreams.delete(execMsg.id);
+			const errorText = sanitizeShellText(String(error));
+			accumulatedOutput += errorText;
+			emitExecUpdate(toolCallId, "shellStream", nativeArgs, {
+				content: accumulatedOutput
+					? [{ type: "text", text: accumulatedOutput }]
+					: [],
+			});
 			sendExecClientMessage(
 				execMsg,
 				"shellStream",
@@ -886,7 +950,7 @@ async function streamShellCommand(
 					event: {
 						case: "stderr",
 						value: create(ShellStreamStderrSchema, {
-							data: sanitizeShellText(String(error)),
+							data: errorText,
 						}),
 					},
 				}),
@@ -919,7 +983,12 @@ async function streamShellCommand(
 		}),
 	);
 
-	return { exitCode, aborted: timedOut, outputFilePath };
+	return {
+		exitCode,
+		aborted: timedOut,
+		outputFilePath,
+		output: accumulatedOutput,
+	};
 }
 
 async function buildGrepResult(args: CursorGrepArgs, cwd: string) {
@@ -1765,29 +1834,6 @@ function getPrimaryText(result: ToolExecution["result"] | undefined): string {
 			.map((item) => item.text || "")
 			.join("\n") || ""
 	);
-}
-
-function previewText(
-	text: string | undefined,
-	maxLines = 12,
-	maxChars = 1500,
-): string | undefined {
-	if (!text) {
-		return undefined;
-	}
-	const normalized = text.trim();
-	if (!normalized) {
-		return undefined;
-	}
-	const lines = normalized.split(/\r?\n/).slice(0, maxLines);
-	const joined = lines.join("\n");
-	if (
-		joined.length <= maxChars &&
-		lines.length === normalized.split(/\r?\n/).length
-	) {
-		return joined;
-	}
-	return `${joined.slice(0, maxChars)}\n…`;
 }
 
 function summarizeGrepResult(result: {
