@@ -7,6 +7,13 @@ import {
 	createCursorExecBridge,
 	setCursorExecBridge,
 } from "./cursor-exec-bridge";
+import {
+	buildCursorExecMessage,
+	CURSOR_EXEC_MESSAGE_TYPE,
+	isCursorExecMessage,
+	renderCursorExecMessage,
+	shouldPersistCursorExecMessage,
+} from "./cursor-exec-message";
 import type { CursorExecUiMessage } from "./cursor-exec-ui";
 import { setCursorExecUiSink } from "./cursor-exec-ui";
 import {
@@ -218,8 +225,24 @@ function activateCursorSession(ctx: ExtensionContext): void {
 
 export default function (pi: ExtensionAPI) {
 	registerCursorProvider(pi, activeModels);
+	pi.registerMessageRenderer(CURSOR_EXEC_MESSAGE_TYPE, renderCursorExecMessage);
 	setCursorExecUiSink((event) => {
 		recordCursorExecEvent(event);
+		if (shouldPersistCursorExecMessage(event)) {
+			pi.sendMessage(buildCursorExecMessage(event), {
+				deliverAs: "nextTurn",
+			});
+		}
+	});
+
+	pi.on("context", async (event) => {
+		const messages = event.messages.filter(
+			(message) => !isCursorExecMessage(message),
+		);
+		if (messages.length === event.messages.length) {
+			return;
+		}
+		return { messages };
 	});
 
 	pi.registerCommand("cursor-sync-models", {
