@@ -7,15 +7,9 @@ import {
 	createCursorExecBridge,
 	setCursorExecBridge,
 } from "./cursor-exec-bridge";
-import {
-	buildCursorExecMessage,
-	CURSOR_EXEC_MESSAGE_TYPE,
-	isCursorExecMessage,
-	renderCursorExecMessage,
-	shouldPersistCursorExecMessage,
-} from "./cursor-exec-message";
 import type { CursorExecUiMessage } from "./cursor-exec-ui";
 import { setCursorExecUiSink } from "./cursor-exec-ui";
+import { createCursorExecWidget } from "./cursor-exec-widget";
 import {
 	CURSOR_DEFAULT_BASE_URL,
 	FALLBACK_MODELS,
@@ -28,7 +22,8 @@ const PROVIDER_NAME = "cursor";
 const PROVIDER_API = "cursor-chat-api";
 const STATUS_KEY = "cursor-oauth";
 const EXEC_WIDGET_KEY = "cursor-exec";
-const MAX_EXEC_WIDGET_EVENTS = 6;
+const MAX_EXEC_WIDGET_RUNNING_EVENTS = 2;
+const MAX_EXEC_EVENTS_HISTORY = 20;
 
 let activeModels: ProviderModelConfig[] = FALLBACK_MODELS;
 let syncInFlight: Promise<boolean> | null = null;
@@ -104,73 +99,33 @@ async function syncCursorModels(
 	}
 }
 
-function trimPreview(
-	text: string | undefined,
-	maxLines = 2,
-): string | undefined {
-	if (!text) {
-		return undefined;
+function getVisibleCursorExecEvents(): CursorExecUiMessage[] {
+	const running = execEvents.filter((event) => event.status === "running");
+	if (running.length > 0) {
+		const completed = execEvents.filter((event) => event.status !== "running");
+		const latestCompleted = completed.at(-1);
+		return [
+			...running.slice(-MAX_EXEC_WIDGET_RUNNING_EVENTS),
+			...(latestCompleted ? [latestCompleted] : []),
+		];
 	}
-	const normalized = text.trim();
-	if (!normalized) {
-		return undefined;
-	}
-	const lines = normalized.split(/\r?\n/);
-	if (lines.length <= maxLines) {
-		return normalized;
-	}
-	return `${lines.slice(0, maxLines).join("\n")}\n…`;
-}
-
-function compactInline(
-	text: string | undefined,
-	maxChars = 96,
-): string | undefined {
-	const normalized = trimPreview(text, 1)?.replace(/\s+/g, " ").trim();
-	if (!normalized) {
-		return undefined;
-	}
-	if (normalized.length <= maxChars) {
-		return normalized;
-	}
-	return `${normalized.slice(0, maxChars - 1)}…`;
-}
-
-function formatCursorExecEvent(event: CursorExecUiMessage): string {
-	const icon =
-		event.status === "running"
-			? "▶"
-			: event.status === "success"
-				? "✓"
-				: event.status === "error"
-					? "✗"
-					: event.status === "rejected"
-						? "!"
-						: "•";
-	const title = compactInline(event.title, 56) ?? event.tool;
-	const summarySource =
-		event.status === "running" ? event.body : (event.preview ?? event.body);
-	const summary = compactInline(summarySource, 72);
-	if (!summary || summary === title) {
-		return `${icon} ${event.tool} ${title}`;
-	}
-	return `${icon} ${event.tool} ${title} — ${summary}`;
+	const latestCompleted = execEvents.at(-1);
+	return latestCompleted ? [latestCompleted] : [];
 }
 
 function renderCursorExecWidget(): void {
 	if (!execUi) {
 		return;
 	}
-	if (execEvents.length === 0) {
+	const visibleEvents = getVisibleCursorExecEvents();
+	if (visibleEvents.length === 0) {
 		execUi.setWidget(EXEC_WIDGET_KEY, undefined);
 		return;
 	}
 
-	const lines = [
-		"Cursor exec",
-		...execEvents.slice(-MAX_EXEC_WIDGET_EVENTS).map(formatCursorExecEvent),
-	];
-	execUi.setWidget(EXEC_WIDGET_KEY, lines);
+	execUi.setWidget(EXEC_WIDGET_KEY, createCursorExecWidget(visibleEvents), {
+		placement: "belowEditor",
+	});
 }
 
 function bindCursorExecUi(ctx: ExtensionContext): void {
@@ -200,8 +155,8 @@ function recordCursorExecEvent(event: CursorExecUiMessage): void {
 	}
 
 	execEvents.push(event);
-	if (execEvents.length > MAX_EXEC_WIDGET_EVENTS) {
-		execEvents = execEvents.slice(-MAX_EXEC_WIDGET_EVENTS);
+	if (execEvents.length > MAX_EXEC_EVENTS_HISTORY) {
+		execEvents = execEvents.slice(-MAX_EXEC_EVENTS_HISTORY);
 	}
 	renderCursorExecWidget();
 }
@@ -225,24 +180,20 @@ function activateCursorSession(ctx: ExtensionContext): void {
 
 export default function (pi: ExtensionAPI) {
 	registerCursorProvider(pi, activeModels);
-	pi.registerMessageRenderer(CURSOR_EXEC_MESSAGE_TYPE, renderCursorExecMessage);
 	setCursorExecUiSink((event) => {
 		recordCursorExecEvent(event);
-		if (shouldPersistCursorExecMessage(event)) {
-			pi.sendMessage(buildCursorExecMessage(event), {
-				deliverAs: "nextTurn",
-			});
+	});
+
+	pi.on("agent_start", async (_event, ctx) => {
+		if (ctx.model?.provider === PROVIDER_NAME) {
+			resetCursorExecUi();
 		}
 	});
 
-	pi.on("context", async (event) => {
-		const messages = event.messages.filter(
-			(message) => !isCursorExecMessage(message),
-		);
-		if (messages.length === event.messages.length) {
-			return;
+	pi.on("agent_end", async (_event, ctx) => {
+		if (ctx.model?.provider === PROVIDER_NAME && execEvents.length > 0) {
+			resetCursorExecUi();
 		}
-		return { messages };
 	});
 
 	pi.registerCommand("cursor-sync-models", {
