@@ -1308,6 +1308,138 @@ exit 1
 		expect(messages.at(-1)?.message.case).toBe("execClientControlMessage");
 	});
 
+	test("uses bash discovered on PATH for shell streams when /bin/bash is unavailable", async () => {
+		const cwd = makeTempDir();
+		const binDir = makeTempDir("cursor-exec-bridge-bin-");
+		const fakeShell = createExecutableScript(
+			binDir,
+			"fake-bash",
+			`#!/bin/sh
+if [ "$1" = "-lc" ]; then
+	shift
+fi
+eval "$1"
+`,
+		);
+		createExecutableScript(
+			binDir,
+			"which",
+			`#!/bin/sh
+if [ "$1" = "bash" ]; then
+	printf '%s\\n' '${fakeShell}'
+	exit 0
+fi
+exit 1
+`,
+		);
+		const realExistsSync = fs.existsSync;
+		spyOn(fs, "existsSync").mockImplementation(((
+			candidatePath: fs.PathLike,
+		) => {
+			if (candidatePath === "/bin/bash") {
+				return false;
+			}
+			return realExistsSync(candidatePath);
+		}) as typeof fs.existsSync);
+
+		const request = createH2Request();
+		await withEnvironment(
+			{
+				PATH: `${binDir}:${process.env.PATH ?? ""}`,
+			},
+			async () => {
+				await handleExecServerMessage(
+					makeExecMessage(
+						"shellStreamArgs",
+						ShellArgsSchema,
+						{
+							command: "printf 'path-bash\\n'",
+							workingDirectory: ".",
+							timeout: 0,
+							toolCallId: "shell-stream-path-bash",
+						},
+						{ id: 103 },
+					),
+					request.stream,
+					createCursorExecBridge(cwd),
+				);
+			},
+		);
+
+		const messages = decodeClientMessages(request.writes);
+		const shellEvents = messages
+			.filter((message) => message.message.case === "execClientMessage")
+			.map((message) => message.message.value.message)
+			.filter((message) => message.case === "shellStream")
+			.map((message) => message.value.event);
+
+		expect(shellEvents.map((event) => event.case)).toEqual([
+			"start",
+			"stdout",
+			"exit",
+		]);
+		expect(shellEvents[1]?.value.data).toBe("path-bash\n");
+		expect(shellEvents[2]?.value.code).toBe(0);
+		expect(shellEvents[2]?.value.aborted).toBe(false);
+		expect(messages.at(-1)?.message.case).toBe("execClientControlMessage");
+	});
+
+	test("falls back to sh for shell streams when bash cannot be resolved", async () => {
+		const cwd = makeTempDir();
+		const binDir = makeTempDir("cursor-exec-bridge-bin-");
+		createExecutableScript(binDir, "which", "#!/bin/sh\nexit 1\n");
+		const realExistsSync = fs.existsSync;
+		spyOn(fs, "existsSync").mockImplementation(((
+			candidatePath: fs.PathLike,
+		) => {
+			if (candidatePath === "/bin/bash") {
+				return false;
+			}
+			return realExistsSync(candidatePath);
+		}) as typeof fs.existsSync);
+
+		const request = createH2Request();
+		await withEnvironment(
+			{
+				PATH: `${binDir}:${process.env.PATH ?? ""}`,
+			},
+			async () => {
+				await handleExecServerMessage(
+					makeExecMessage(
+						"shellStreamArgs",
+						ShellArgsSchema,
+						{
+							command: "printf 'sh-fallback\\n'",
+							workingDirectory: ".",
+							timeout: 0,
+							toolCallId: "shell-stream-sh-fallback",
+						},
+						{ id: 104 },
+					),
+					request.stream,
+					createCursorExecBridge(cwd),
+				);
+			},
+		);
+
+		const messages = decodeClientMessages(request.writes);
+		const shellEvents = messages
+			.filter((message) => message.message.case === "execClientMessage")
+			.map((message) => message.message.value.message)
+			.filter((message) => message.case === "shellStream")
+			.map((message) => message.value.event);
+
+		expect(shellEvents.map((event) => event.case)).toEqual([
+			"start",
+			"stdout",
+			"exit",
+		]);
+		expect(shellEvents[1]?.value.data).toBe("sh-fallback\n");
+		expect(shellEvents[2]?.value.code).toBe(0);
+		expect(shellEvents[2]?.value.aborted).toBe(false);
+		expect(messages.at(-1)?.message.case).toBe("execClientControlMessage");
+	});
+
 	test("returns grep content, files, counts, and unsupported mode errors", async () => {
 		const cwd = makeTempDir();
 		fs.writeFileSync(
@@ -1413,6 +1545,47 @@ exit 1
 		expect(unsupportedPayload.message.value.result.value.error).toContain(
 			"Unsupported grep output mode",
 		);
+	});
+
+	test("ignores non-content ripgrep JSON events while collecting grep content", async () => {
+		const cwd = makeTempDir();
+		const alphaPath = path.join(cwd, "alpha.txt");
+		fs.writeFileSync(alphaPath, "needle one\nneighbor\n");
+
+		const request = createH2Request();
+		await handleExecServerMessage(
+			makeExecMessage("grepArgs", GrepArgsSchema, {
+				pattern: "needle",
+				path: ".",
+				outputMode: "content",
+				contextAfter: 1,
+				toolCallId: "grep-ignore-begin-summary",
+			}),
+			request.stream,
+			createCursorExecBridge(cwd),
+		);
+
+		const payload = getExecClientPayload(decodeClientMessages(request.writes));
+		expect(payload.message.case).toBe("grepResult");
+		expect(payload.message.value.result.case).toBe("success");
+		const contentWorkspace =
+			payload.message.value.result.value.workspaceResults[cwd];
+		expect(contentWorkspace?.result.case).toBe("content");
+		expect(contentWorkspace?.result.value.totalLines).toBe(2);
+		expect(contentWorkspace?.result.value.totalMatchedLines).toBe(1);
+		expect(contentWorkspace?.result.value.clientTruncated).toBe(false);
+		expect(contentWorkspace?.result.value.matches).toHaveLength(1);
+		expect(contentWorkspace?.result.value.matches[0]?.file).toBe("alpha.txt");
+		expect(
+			contentWorkspace?.result.value.matches[0]?.matches.map((match: any) => ({
+				lineNumber: match.lineNumber,
+				content: match.content,
+				isContextLine: match.isContextLine,
+			})),
+		).toEqual([
+			{ lineNumber: 1, content: "needle one", isContextLine: false },
+			{ lineNumber: 2, content: "neighbor", isContextLine: true },
+		]);
 	});
 
 	test("returns a clear grep error when rg cannot be resolved", async () => {

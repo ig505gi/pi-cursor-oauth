@@ -1,4 +1,12 @@
-import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
+import {
+	afterEach,
+	beforeEach,
+	describe,
+	expect,
+	mock,
+	spyOn,
+	test,
+} from "bun:test";
 import { EventEmitter } from "node:events";
 import { create, fromBinary, toBinary } from "@bufbuild/protobuf";
 import {
@@ -42,6 +50,12 @@ type MockRequest = EventEmitter & {
 type MockClient = EventEmitter & {
 	close: ReturnType<typeof mock>;
 	request: (headers: Record<string, string>) => MockRequest;
+};
+
+type CapturedInterval = {
+	callback: () => void;
+	delay: number;
+	handle: NodeJS.Timeout;
 };
 
 const providerScenario: {
@@ -226,6 +240,32 @@ function asMockStream(stream: unknown): MockStream {
 	return stream as MockStream;
 }
 
+function captureIntervals() {
+	const intervals: CapturedInterval[] = [];
+	const setIntervalSpy = spyOn(globalThis, "setInterval").mockImplementation(((
+		callback: Parameters<typeof setInterval>[0],
+		delay?: number,
+	) => {
+		if (typeof callback !== "function") {
+			throw new Error("Expected function timer callback");
+		}
+		const handle = { id: intervals.length + 1 } as unknown as NodeJS.Timeout;
+		intervals.push({
+			callback: () => {
+				callback();
+			},
+			delay: Number(delay ?? 0),
+			handle,
+		});
+		return handle;
+	}) as typeof setInterval);
+	const clearIntervalSpy = spyOn(
+		globalThis,
+		"clearInterval",
+	).mockImplementation((() => {}) as typeof clearInterval);
+	return { intervals, setIntervalSpy, clearIntervalSpy };
+}
+
 beforeEach(async () => {
 	resetScenario();
 	const { resetCursorConversation } = await loadProvider();
@@ -367,6 +407,81 @@ describe("cursor-provider", () => {
 		});
 	});
 
+	test("closes thinking before summary continues visible assistant text", async () => {
+		const { streamCursorChat } = await loadProvider();
+
+		const stream = streamCursorChat(createModel(), createContext(), {
+			apiKey: "cursor-access-token",
+		});
+		const mockStream = asMockStream(stream);
+
+		await waitFor(() => providerScenario.requests.length === 1);
+		const request = providerScenario.requests[0]!;
+		request.emit(
+			"data",
+			frameConnectMessage(
+				encodeServerMessage(
+					"interactionUpdate",
+					create(InteractionUpdateSchema, {
+						message: {
+							case: "thinkingDelta",
+							value: create(ThinkingDeltaUpdateSchema, { text: "Plan first" }),
+						},
+					}),
+				),
+			),
+		);
+		request.emit(
+			"data",
+			frameConnectMessage(
+				encodeServerMessage(
+					"interactionUpdate",
+					create(InteractionUpdateSchema, {
+						message: {
+							case: "summary",
+							value: create(SummaryUpdateSchema, { summary: "Visible plan" }),
+						},
+					}),
+				),
+			),
+		);
+		request.emit("end");
+
+		await waitFor(() => mockStream.ended);
+
+		expect(mockStream.events.map((event) => event.type)).toEqual([
+			"start",
+			"thinking_start",
+			"thinking_delta",
+			"thinking_end",
+			"text_start",
+			"text_delta",
+			"text_end",
+			"done",
+		]);
+		expect(mockStream.events[3]).toMatchObject({
+			type: "thinking_end",
+			content: "Plan first",
+		});
+		expect(mockStream.events[5]).toMatchObject({
+			type: "text_delta",
+			delta: "Visible plan",
+		});
+		expect(mockStream.events[6]).toMatchObject({
+			type: "text_end",
+			content: "Visible plan",
+		});
+		expect(mockStream.events[7]).toMatchObject({
+			type: "done",
+			message: expect.objectContaining({
+				content: [
+					expect.objectContaining({ type: "thinking" }),
+					expect.objectContaining({ type: "text", text: "Visible plan" }),
+				],
+			}),
+		});
+	});
+
 	test("surfaces gRPC trailer errors", async () => {
 		const { streamCursorChat } = await loadProvider();
 
@@ -426,6 +541,66 @@ describe("cursor-provider", () => {
 				errorMessage: "Connect error permission_denied: No access",
 			}),
 		});
+	});
+
+	test("sends heartbeat frames while the request is open and stops after close", async () => {
+		const { streamCursorChat } = await loadProvider();
+		const { intervals, clearIntervalSpy } = captureIntervals();
+
+		const stream = streamCursorChat(createModel(), createContext(), {
+			apiKey: "cursor-access-token",
+		});
+		const mockStream = asMockStream(stream);
+
+		await waitFor(() => providerScenario.requests.length === 1);
+		const request = providerScenario.requests[0]!;
+		expect(intervals).toHaveLength(1);
+		expect(intervals[0]?.delay).toBe(5000);
+		expect(request.writes).toHaveLength(1);
+
+		intervals[0]!.callback();
+		expect(request.writes).toHaveLength(2);
+		const heartbeatMessage = decodeClientMessages(request.writes)[1];
+		expect(heartbeatMessage?.message.case).toBe("clientHeartbeat");
+
+		request.closed = true;
+		intervals[0]!.callback();
+		expect(request.writes).toHaveLength(2);
+
+		request.emit("end");
+		await waitFor(() => mockStream.ended);
+
+		expect(clearIntervalSpy).toHaveBeenCalledWith(intervals[0]?.handle);
+	});
+
+	test("clears the heartbeat timer when the stream exits through a trailer error", async () => {
+		const { streamCursorChat } = await loadProvider();
+		const { intervals, clearIntervalSpy } = captureIntervals();
+
+		const stream = streamCursorChat(createModel(), createContext(), {
+			apiKey: "cursor-access-token",
+		});
+		const mockStream = asMockStream(stream);
+
+		await waitFor(() => providerScenario.requests.length === 1);
+		const request = providerScenario.requests[0]!;
+		expect(intervals).toHaveLength(1);
+
+		request.emit("trailers", {
+			"grpc-status": "13",
+			"grpc-message": "heartbeat%20failed",
+		});
+
+		await waitFor(() => mockStream.ended);
+
+		expect(mockStream.events.at(-1)).toMatchObject({
+			type: "error",
+			reason: "error",
+			error: expect.objectContaining({
+				errorMessage: "gRPC error 13: heartbeat failed",
+			}),
+		});
+		expect(clearIntervalSpy).toHaveBeenCalledWith(intervals[0]?.handle);
 	});
 
 	test("aborts the request when the caller signal is cancelled", async () => {
