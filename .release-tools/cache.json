@@ -1,0 +1,16 @@
+{
+	"scripts": {
+		"typecheck": "tsc --noEmit && tsc -p tsconfig.tests.json --noEmit",
+		"knip": "knip --production",
+		"lint": "biome check --write",
+		"lint:ci": "biome ci .",
+		"check": "bun run typecheck && bun run knip && bun run lint && AGENT=1 bun test --coverage",
+		"check:ci": "bun run typecheck && bun run knip && bun run lint:ci && AGENT=1 bun test --coverage",
+		"prepare": "husky"
+	},
+	"lintStaged": {
+		"*": ["biome check --write --no-errors-on-unmatched"]
+	},
+	"tsconfig": "{\n  \"compilerOptions\": {\n    \"target\": \"ESNext\",\n    \"module\": \"ESNext\",\n    \"moduleResolution\": \"Bundler\",\n    \"lib\": [\n      \"ESNext\"\n    ],\n    \"strict\": true,\n    \"skipLibCheck\": true,\n    \"noEmit\": true,\n    \"isolatedModules\": true,\n    \"outDir\": \"dist\",\n    \"rootDir\": \"src\"\n  },\n  \"include\": [\n    \"src\"\n  ]\n}\n",
+	"installedDeps": []
+}
