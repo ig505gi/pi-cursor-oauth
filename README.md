@@ -3,52 +3,25 @@
 [![Version](https://img.shields.io/github/v/tag/kenryu42/pi-cursor-oauth?label=version&color=blue)](https://github.com/kenryu42/pi-cursor-oauth)
 [![License: MIT](https://img.shields.io/badge/License-MIT-red.svg)](https://opensource.org/licenses/MIT)
 
-> [!WARNING]
-> This extension is vibe coded by ~~copying~~ referencing [oh-my-pi](https://github.com/can1357/oh-my-pi) implementation.
+A pi extension that registers a `cursor` provider, supports Cursor browser OAuth, and forwards chat plus a limited set of Cursor exec calls through pi.
 
-A pi extension that adds Cursor OAuth login and a Cursor-backed model provider.
+## Features
 
-## What it does
-
-- Registers a `cursor` provider for pi
+- Registers a `cursor` provider with the `cursor-chat-api` transport
 - Supports `/login cursor` using Cursor's browser OAuth flow
 - Uses `CURSOR_ACCESS_TOKEN` as the environment variable fallback
-- Ships a fallback Cursor model list
-- Adds `/cursor-sync-models` to fetch the current usable model list from Cursor
-- Adds `/cursor-reset-conversation` to reset the cached Cursor conversation state
+- Ships a fallback model list so the provider is usable before live model sync
+- Refreshes usable models from Cursor with `/cursor-sync-models`
+- Resets cached Cursor conversation state with `/cursor-reset-conversation`
+- Resets session-scoped Cursor state when pi sessions start, switch, or fork
 
-## Exec bridge support
-
-This extension now includes a **minimal Cursor exec bridge**.
-
-Supported exec calls:
-- `read`
-- `ls`
-- `grep` (`content`, `files_with_matches`, `count`)
-- `write` for text content
-- `delete`
-- `shell`
-- `shellStream`
-- request context
-
-Bridge behavior notes:
-- exec streams are now explicitly closed after tool completion so Cursor does not stay stuck on `working...`
-- unsupported interaction queries from Cursor are answered immediately instead of being left pending
-- Cursor exec activity is mirrored into a small pi TUI widget so tool runs are visible without injecting extra conversation messages
-
-Current limitations:
-- binary `write` via raw bytes is not supported yet
-- MCP/resource/background-shell/computer-use style exec calls are rejected
-
-## Usage
-
-### 1. Installation
+## Install
 
 ```bash
 pi install npm:pi-cursor-oauth
 ```
 
-### 2. Authenticate
+## Authenticate
 
 Inside pi:
 
@@ -56,33 +29,74 @@ Inside pi:
 /login cursor
 ```
 
-Or provide an environment variable:
+Or provide a token directly:
 
 ```bash
 export CURSOR_ACCESS_TOKEN=...
 ```
 
-### 3. Refresh models
+## Sync models
 
-Inside pi:
+The extension starts with a bundled fallback model list and can refresh the currently usable Cursor model list on demand. When Cursor credentials are available, it also attempts a quiet model sync on session start and when the Cursor model is selected.
 
 ```text
 /cursor-sync-models
 ```
 
-Then select a Cursor model with `/model`.
+Then pick a Cursor model with `/model`.
 
 ## Commands
 
 - `/cursor-sync-models` - refresh the provider's model list from Cursor
 - `/cursor-reset-conversation` - clear cached Cursor conversation state
 
-## Files
+## Exec bridge
 
-- `src/index.ts` - extension entry point
-- `src/cursor-oauth.ts` - Cursor OAuth login and refresh flow
+This extension includes a limited Cursor exec bridge.
+
+Supported exec calls:
+- `read`
+- `ls`
+- `grep` with `content`, `files_with_matches`, and `count`
+- `write` for text content
+- `delete`
+- `shell`
+- `shellStream`
+- `requestContext`
+
+Bridge behavior notes:
+- Exec streams are explicitly closed after tool completion so Cursor does not remain stuck on `working...`
+- Unsupported interaction queries are answered immediately instead of being left pending
+- Cursor exec activity is best-effort mirrored into a small pi TUI widget instead of extra conversation messages
+- The pi TUI integration currently relies on a private internal-path/prototype patch into pi internals, so it is inherently brittle and may break across pi versions or non-Homebrew installs
+
+Current limitations:
+- Binary `write` via raw bytes is not supported
+- Background shell spawning is not supported
+- `writeShellStdin` is not supported
+- `diagnostics` is not supported
+- `fetch` is not supported
+- Generic MCP tool calls and MCP resource operations are not supported
+- `recordScreen` is not supported
+- `computerUse` is not supported
+
+## Development
+
+```bash
+bun install
+bun run build
+bun run check
+```
+
+Useful commands:
+- `bun run build` - bundle `src/index.ts` into `dist/` and emit type declarations
+- `bun run check` - run typecheck, knip, Biome, and the Bun test suite with coverage
+- `bun run check:ci` - CI validation: typecheck, knip, Biome CI mode, tests with LCOV, then build
+
+Key source files:
+- `src/index.ts` - extension entry point and pi registration
+- `src/cursor-oauth.ts` - Cursor OAuth login and token refresh
 - `src/cursor-models.ts` - fallback models and live model discovery
-- `src/cursor-provider.ts` - Cursor chat transport implementation
+- `src/cursor-provider.ts` - Cursor chat transport
 - `src/cursor-exec-bridge.ts` - Cursor exec dispatch and result mapping
-- `src/cursor-gen/agent_pb.ts` - generated protobuf bindings used by the Cursor API
-
+- `src/pi-native-tool-hack.ts` - best-effort native tool event bridge for pi UI integration
