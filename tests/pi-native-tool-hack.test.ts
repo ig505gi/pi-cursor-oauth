@@ -1,10 +1,8 @@
-import { afterEach, describe, expect, mock, test } from "bun:test";
+import { afterEach, describe, expect, mock, spyOn, test } from "bun:test";
+import * as fs from "node:fs";
+import * as path from "node:path";
+import { pathToFileURL } from "node:url";
 import * as nativeToolHack from "../src/pi-native-tool-hack";
-
-const PI_INTERACTIVE_MODE_PATH =
-	"/opt/homebrew/lib/node_modules/@mariozechner/pi-coding-agent/dist/modes/interactive/interactive-mode.js";
-const PI_ASSISTANT_MESSAGE_COMPONENT_PATH =
-	"/opt/homebrew/lib/node_modules/@mariozechner/pi-coding-agent/dist/modes/interactive/components/assistant-message.js";
 
 afterEach(() => {
 	mock.restore();
@@ -24,7 +22,7 @@ function createCursorMessage(text: string) {
 	};
 }
 
-function setupPiNativeToolModules(
+async function setupPiNativeToolModules(
 	options: {
 		exportInteractiveMode?: boolean;
 		handleEvent?: ((this: any, event: any) => unknown) | undefined;
@@ -37,6 +35,8 @@ function setupPiNativeToolModules(
 		hideThinkingBlock?: boolean;
 	} = {},
 ) {
+	const { interactiveModePath, assistantMessagePath } =
+		await nativeToolHack.__resolvePiNativeToolHackModulePathsForTests();
 	const forwardedEvents: any[] = [];
 	const assistantSegments: any[] = [];
 	const removeChild: any =
@@ -93,10 +93,10 @@ function setupPiNativeToolModules(
 		(InteractiveMode.prototype as any).__cursorNativeHackInstalled = true;
 	}
 
-	mock.module(PI_INTERACTIVE_MODE_PATH, () =>
+	mock.module(interactiveModePath, () =>
 		options.exportInteractiveMode === false ? {} : { InteractiveMode },
 	);
-	mock.module(PI_ASSISTANT_MESSAGE_COMPONENT_PATH, () => ({
+	mock.module(assistantMessagePath, () => ({
 		AssistantMessageComponent,
 	}));
 
@@ -114,6 +114,177 @@ function setupPiNativeToolModules(
 }
 
 describe("pi-native-tool-hack", () => {
+	test("resolves pi internal module paths from the installed package root", async () => {
+		const { interactiveModePath, assistantMessagePath } =
+			await nativeToolHack.__resolvePiNativeToolHackModulePathsForTests();
+
+		expect(interactiveModePath).toEndWith(
+			path.join(
+				"@mariozechner",
+				"pi-coding-agent",
+				"dist",
+				"modes",
+				"interactive",
+				"interactive-mode.js",
+			),
+		);
+		expect(assistantMessagePath).toEndWith(
+			path.join(
+				"@mariozechner",
+				"pi-coding-agent",
+				"dist",
+				"modes",
+				"interactive",
+				"components",
+				"assistant-message.js",
+			),
+		);
+	});
+
+	test("prefers argv-derived pi paths over the extension's locally resolved dependency copy", async () => {
+		const runtimePrefix = path.join("/tmp", "runtime-prefix");
+		const runtimePackageRoot = path.join(
+			runtimePrefix,
+			"lib",
+			"node_modules",
+			"@mariozechner",
+			"pi-coding-agent",
+		);
+		const runtimeInteractiveModePath = path.join(
+			runtimePackageRoot,
+			"dist",
+			"modes",
+			"interactive",
+			"interactive-mode.js",
+		);
+		const runtimeAssistantMessagePath = path.join(
+			runtimePackageRoot,
+			"dist",
+			"modes",
+			"interactive",
+			"components",
+			"assistant-message.js",
+		);
+		const localPackageRoot = path.join("/tmp", "local-copy", "pi-coding-agent");
+		const localInteractiveModePath = path.join(
+			localPackageRoot,
+			"dist",
+			"modes",
+			"interactive",
+			"interactive-mode.js",
+		);
+		const localAssistantMessagePath = path.join(
+			localPackageRoot,
+			"dist",
+			"modes",
+			"interactive",
+			"components",
+			"assistant-message.js",
+		);
+
+		const resolved =
+			await nativeToolHack.__resolvePiNativeToolHackModulePathsForTests({
+				resolveImport: async () =>
+					pathToFileURL(path.join(localPackageRoot, "dist", "index.js")).href,
+				existsSync: (candidatePath) =>
+					candidatePath === runtimeInteractiveModePath ||
+					candidatePath === runtimeAssistantMessagePath ||
+					candidatePath === localInteractiveModePath ||
+					candidatePath === localAssistantMessagePath,
+				readFileSync: () => "",
+				realpathSync: (candidatePath) => candidatePath,
+				argv: [
+					path.join(runtimePrefix, "bin", "node"),
+					path.join(runtimePrefix, "bin", "pi"),
+				],
+				execPath: path.join(runtimePrefix, "bin", "node"),
+				env: {},
+			});
+
+		expect(resolved).toEqual({
+			interactiveModePath: runtimeInteractiveModePath,
+			assistantMessagePath: runtimeAssistantMessagePath,
+		});
+	});
+
+	test("falls back to argv-derived npm global paths when package resolution fails", async () => {
+		const prefix = path.join("/tmp", "custom-prefix");
+		const packageRoot = path.join(
+			prefix,
+			"lib",
+			"node_modules",
+			"@mariozechner",
+			"pi-coding-agent",
+		);
+		const interactiveModePath = path.join(
+			packageRoot,
+			"dist",
+			"modes",
+			"interactive",
+			"interactive-mode.js",
+		);
+		const assistantMessagePath = path.join(
+			packageRoot,
+			"dist",
+			"modes",
+			"interactive",
+			"components",
+			"assistant-message.js",
+		);
+
+		const resolved =
+			await nativeToolHack.__resolvePiNativeToolHackModulePathsForTests({
+				resolveImport: async () => {
+					throw new Error("not exported");
+				},
+				existsSync: (candidatePath) =>
+					candidatePath === interactiveModePath ||
+					candidatePath === assistantMessagePath,
+				readFileSync: () => "",
+				realpathSync: (candidatePath) => candidatePath,
+				argv: [
+					path.join(prefix, "bin", "node"),
+					path.join(prefix, "bin", "pi"),
+				],
+				execPath: path.join(prefix, "bin", "node"),
+				env: {},
+			});
+
+		expect(resolved).toEqual({
+			interactiveModePath,
+			assistantMessagePath,
+		});
+	});
+
+	test("surfaces a clear fallback error when private pi internals cannot be found and allows retry", async () => {
+		const resolved =
+			await nativeToolHack.__resolvePiNativeToolHackModulePathsForTests();
+		nativeToolHack.__resetPiNativeToolHackForTests();
+		const realExistsSync = fs.existsSync;
+		spyOn(fs, "existsSync").mockImplementation(((
+			candidatePath: fs.PathLike,
+		) => {
+			if (candidatePath === resolved.assistantMessagePath) {
+				return false;
+			}
+			return realExistsSync(candidatePath);
+		}) as typeof fs.existsSync);
+
+		await expect(nativeToolHack.installPiNativeToolHack()).rejects.toThrow(
+			"Failed to locate private pi interactive modules for the native tool hack.",
+		);
+		await expect(nativeToolHack.installPiNativeToolHack()).rejects.toThrow(
+			"Expected assistant-message:",
+		);
+
+		mock.restore();
+		nativeToolHack.__resetPiNativeToolHackForTests();
+		await setupPiNativeToolModules();
+		await expect(
+			nativeToolHack.installPiNativeToolHack(),
+		).resolves.toBeUndefined();
+	});
+
 	test("emit helpers no-op when no interactive mode has been activated", async () => {
 		expect(() =>
 			nativeToolHack.emitNativeToolExecutionStart("call-1", "grep", {
@@ -139,7 +310,7 @@ describe("pi-native-tool-hack", () => {
 	});
 
 	test("installs once and dispatches native tool lifecycle events to the active interactive mode", async () => {
-		const harness = setupPiNativeToolModules();
+		const harness = await setupPiNativeToolModules();
 
 		const firstInstall = nativeToolHack.installPiNativeToolHack();
 		const secondInstall = nativeToolHack.installPiNativeToolHack();
@@ -236,7 +407,7 @@ describe("pi-native-tool-hack", () => {
 
 	test("splits visible assistant output around a tool and refreshes the streaming tail", async () => {
 		const toolComponent = { id: "tool-component" };
-		const harness = setupPiNativeToolModules({
+		const harness = await setupPiNativeToolModules({
 			pendingTools: new Map([["tool-1", toolComponent]]),
 			hideThinkingBlock: true,
 			getMarkdownThemeWithSettings: () => ({ theme: "cursor" }),
@@ -308,7 +479,7 @@ describe("pi-native-tool-hack", () => {
 	});
 
 	test("skips assistant segment rendering when the tail has no visible content", async () => {
-		const harness = setupPiNativeToolModules();
+		const harness = await setupPiNativeToolModules();
 
 		await nativeToolHack.installPiNativeToolHack();
 		const interactiveMode = new harness.InteractiveMode();
@@ -341,7 +512,7 @@ describe("pi-native-tool-hack", () => {
 	});
 
 	test("returns early when split prerequisites are missing and swallows container errors", async () => {
-		const missingHarness = setupPiNativeToolModules({
+		const missingHarness = await setupPiNativeToolModules({
 			chatContainer: undefined,
 			streamingComponent: { updateContent: mock(() => undefined) },
 		});
@@ -364,7 +535,7 @@ describe("pi-native-tool-hack", () => {
 		expect(missingHarness.requestRender).not.toHaveBeenCalled();
 
 		const toolComponent = { id: "tool-component" };
-		const errorHarness = setupPiNativeToolModules({
+		const errorHarness = await setupPiNativeToolModules({
 			chatContainer: {
 				removeChild: mock(() => {
 					throw new Error("remove failed");
@@ -392,7 +563,7 @@ describe("pi-native-tool-hack", () => {
 	});
 
 	test("clears split state on agent_end", async () => {
-		const harness = setupPiNativeToolModules();
+		const harness = await setupPiNativeToolModules();
 
 		await nativeToolHack.installPiNativeToolHack();
 		const interactiveMode = new harness.InteractiveMode();
@@ -411,7 +582,7 @@ describe("pi-native-tool-hack", () => {
 	});
 
 	test("install no-ops when the PI interactive mode prototype cannot be patched", async () => {
-		const noPrototypeHarness = setupPiNativeToolModules({
+		const noPrototypeHarness = await setupPiNativeToolModules({
 			exportInteractiveMode: false,
 		});
 
@@ -421,7 +592,7 @@ describe("pi-native-tool-hack", () => {
 		expect(noPrototypeHarness.assistantSegments).toHaveLength(0);
 
 		nativeToolHack.__resetPiNativeToolHackForTests();
-		const noHandleEventHarness = setupPiNativeToolModules({
+		const noHandleEventHarness = await setupPiNativeToolModules({
 			handleEvent: undefined,
 		});
 		(noHandleEventHarness.InteractiveMode.prototype as any).handleEvent =
@@ -436,7 +607,7 @@ describe("pi-native-tool-hack", () => {
 		).toBeUndefined();
 
 		nativeToolHack.__resetPiNativeToolHackForTests();
-		const alreadyInstalledHarness = setupPiNativeToolModules({
+		const alreadyInstalledHarness = await setupPiNativeToolModules({
 			alreadyInstalled: true,
 		});
 
