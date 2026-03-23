@@ -144,16 +144,24 @@ describe("index", () => {
 
 	test("activation swallows native tool hack installation failures", async () => {
 		const harness = createPiHarness();
+		const consoleWarn = mock(() => {});
 		deps.installPiNativeToolHack.mockRejectedValueOnce(
 			new Error("install failed"),
 		);
+		const originalConsoleWarn = console.warn;
+		console.warn = consoleWarn as typeof console.warn;
 
-		expect(() =>
-			createCursorExtension(deps as any)(harness.pi as any),
-		).not.toThrow();
+		try {
+			expect(() =>
+				createCursorExtension(deps as any)(harness.pi as any),
+			).not.toThrow();
 
-		await flushMicrotasks();
-		expect(deps.installPiNativeToolHack).toHaveBeenCalledTimes(1);
+			await flushMicrotasks();
+			expect(deps.installPiNativeToolHack).toHaveBeenCalledTimes(1);
+			expect(consoleWarn).toHaveBeenCalled();
+		} finally {
+			console.warn = originalConsoleWarn;
+		}
 	});
 
 	test("cursor-sync-models warns when credentials are missing or model fetch fails", async () => {

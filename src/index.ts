@@ -134,8 +134,11 @@ export function createCursorExtension(
 
 	return function activate(pi: ExtensionAPI) {
 		registerCursorProvider(pi, activeModels);
-		void deps.installPiNativeToolHack().catch(() => {
-			// Best-effort private API patch.
+		void deps.installPiNativeToolHack().catch((error) => {
+			console.warn(
+				"[pi-cursor-oauth] Failed to install native tool hack:\n%s",
+				error instanceof Error ? error.message : String(error),
+			);
 		});
 
 		pi.registerCommand("cursor-sync-models", {
