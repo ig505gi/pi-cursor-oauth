@@ -22,6 +22,26 @@ function createCursorMessage(text: string) {
 	};
 }
 
+function createPiModulePaths(packageRoot: string) {
+	return {
+		interactiveModePath: path.join(
+			packageRoot,
+			"dist",
+			"modes",
+			"interactive",
+			"interactive-mode.js",
+		),
+		assistantMessagePath: path.join(
+			packageRoot,
+			"dist",
+			"modes",
+			"interactive",
+			"components",
+			"assistant-message.js",
+		),
+	};
+}
+
 async function setupPiNativeToolModules(
 	options: {
 		exportInteractiveMode?: boolean;
@@ -216,21 +236,8 @@ describe("pi-native-tool-hack", () => {
 			"@mariozechner",
 			"pi-coding-agent",
 		);
-		const interactiveModePath = path.join(
-			packageRoot,
-			"dist",
-			"modes",
-			"interactive",
-			"interactive-mode.js",
-		);
-		const assistantMessagePath = path.join(
-			packageRoot,
-			"dist",
-			"modes",
-			"interactive",
-			"components",
-			"assistant-message.js",
-		);
+		const { interactiveModePath, assistantMessagePath } =
+			createPiModulePaths(packageRoot);
 
 		const resolved =
 			await nativeToolHack.__resolvePiNativeToolHackModulePathsForTests({
@@ -254,6 +261,142 @@ describe("pi-native-tool-hack", () => {
 			interactiveModePath,
 			assistantMessagePath,
 		});
+	});
+
+	test("parses realpath-derived cli shims and prefix envs while resolving pi module paths", async () => {
+		const runtimeArgv1 = path.join("/tmp", "bin", "pi");
+		const runtimeExecPath = path.join("/tmp", "bin", "node");
+		const realArgv1 = path.join("/private", "tmp", "shims", "cli.js");
+		const realExecPath = path.join("/private", "tmp", "bin", "node");
+		const shimPackageRoot = path.join(
+			"/private",
+			"tmp",
+			"shim-runtime",
+			"lib",
+			"node_modules",
+			"@mariozechner",
+			"pi-coding-agent",
+		);
+		const envPrefix = path.join("/tmp", "env-prefix");
+		const fallbackPrefix = path.join("/tmp", "fallback-prefix");
+		const shimCliPath = path.join(shimPackageRoot, "dist", "cli.js");
+		const { interactiveModePath, assistantMessagePath } =
+			createPiModulePaths(shimPackageRoot);
+
+		const resolved =
+			await nativeToolHack.__resolvePiNativeToolHackModulePathsForTests({
+				resolveImport: async () => {
+					throw new Error("not exported");
+				},
+				existsSync: (candidatePath) =>
+					candidatePath === realArgv1 ||
+					candidatePath === interactiveModePath ||
+					candidatePath === assistantMessagePath,
+				readFileSync: (candidatePath) => {
+					expect(candidatePath).toBe(realArgv1);
+					return `#!/usr/bin/env node\nrequire("${shimCliPath}")\n`;
+				},
+				realpathSync: (candidatePath) => {
+					if (candidatePath === runtimeArgv1) {
+						return realArgv1;
+					}
+					if (candidatePath === runtimeExecPath) {
+						return realExecPath;
+					}
+					return candidatePath;
+				},
+				argv: [runtimeExecPath, runtimeArgv1],
+				execPath: runtimeExecPath,
+				env: {
+					npm_config_prefix: envPrefix,
+					PREFIX: fallbackPrefix,
+				},
+			});
+
+		expect(resolved).toEqual({
+			interactiveModePath,
+			assistantMessagePath,
+		});
+	});
+
+	test("falls back to prefix env candidates when realpath and shim reads fail", async () => {
+		const shimPath = path.join("/tmp", "shim", "cli.js");
+		const execPath = path.join("/tmp", "bin", "node");
+		const prefix = path.join("/tmp", "prefix-from-env");
+		const prefixBin = path.join(prefix, "bin");
+		const packageRoot = path.join(
+			prefix,
+			"lib",
+			"node_modules",
+			"@mariozechner",
+			"pi-coding-agent",
+		);
+		const { interactiveModePath, assistantMessagePath } =
+			createPiModulePaths(packageRoot);
+
+		const resolved =
+			await nativeToolHack.__resolvePiNativeToolHackModulePathsForTests({
+				resolveImport: async () => {
+					throw "";
+				},
+				existsSync: (candidatePath) =>
+					candidatePath === shimPath ||
+					candidatePath === interactiveModePath ||
+					candidatePath === assistantMessagePath,
+				readFileSync: () => {
+					throw new Error("shim unreadable");
+				},
+				realpathSync: () => {
+					throw new Error("realpath failed");
+				},
+				argv: [execPath, shimPath],
+				execPath,
+				env: {
+					PREFIX: prefixBin,
+				},
+			});
+
+		expect(resolved).toEqual({
+			interactiveModePath,
+			assistantMessagePath,
+		});
+	});
+
+	test("uses the first discovered candidate root when no private modules exist anywhere", async () => {
+		const prefix = path.join("/tmp", "runtime-prefix");
+		const expectedRoot = path.join(
+			prefix,
+			"lib",
+			"node_modules",
+			"@mariozechner",
+			"pi-coding-agent",
+		);
+
+		const error = await nativeToolHack
+			.__resolvePiNativeToolHackModulePathsForTests({
+				resolveImport: async () => {
+					throw "plain failure";
+				},
+				existsSync: () => false,
+				readFileSync: () => "",
+				realpathSync: (candidatePath) => candidatePath,
+				argv: [
+					path.join(prefix, "bin", "node"),
+					path.join(prefix, "bin", "pi"),
+				],
+				execPath: path.join(prefix, "bin", "node"),
+				env: {},
+			})
+			.catch((reason) => reason as Error);
+
+		expect(error).toBeInstanceOf(Error);
+		expect(error.message).toContain(
+			"Package export resolution failed: plain failure",
+		);
+		expect(error.message).toContain(`Chosen pi package root: ${expectedRoot}`);
+		expect(error.message).toContain(
+			`Missing: ${createPiModulePaths(expectedRoot).interactiveModePath}, ${createPiModulePaths(expectedRoot).assistantMessagePath}`,
+		);
 	});
 
 	test("surfaces a clear fallback error when private pi internals cannot be found and allows retry", async () => {
@@ -283,6 +426,60 @@ describe("pi-native-tool-hack", () => {
 		await expect(
 			nativeToolHack.installPiNativeToolHack(),
 		).resolves.toBeUndefined();
+	});
+
+	test("surfaces a clear import error when private pi modules cannot be loaded", async () => {
+		const tempRoot = fs.mkdtempSync(
+			path.join("/tmp", "pi-native-tool-hack-import-"),
+		);
+		const packageRoot = path.join(
+			tempRoot,
+			"lib",
+			"node_modules",
+			"@mariozechner",
+			"pi-coding-agent",
+		);
+		const { interactiveModePath, assistantMessagePath } =
+			createPiModulePaths(packageRoot);
+		const originalArgv = process.argv;
+
+		fs.mkdirSync(path.dirname(interactiveModePath), { recursive: true });
+		fs.mkdirSync(path.dirname(assistantMessagePath), { recursive: true });
+		fs.writeFileSync(
+			interactiveModePath,
+			'throw new Error("interactive import failed");\n',
+		);
+		fs.writeFileSync(
+			assistantMessagePath,
+			"export class AssistantMessageComponent {}\n",
+		);
+
+		process.argv = [
+			originalArgv[0] ?? "node",
+			path.join(tempRoot, "bin", "pi"),
+		];
+
+		try {
+			const error = await nativeToolHack
+				.installPiNativeToolHack()
+				.catch((reason) => reason as Error);
+
+			expect(error).toBeInstanceOf(Error);
+			expect(error.message).toContain(
+				"Failed to import private pi interactive modules for the native tool hack.",
+			);
+			expect(error.message).toContain(
+				`interactive-mode: ${interactiveModePath}`,
+			);
+			expect(error.message).toContain(
+				`assistant-message: ${assistantMessagePath}`,
+			);
+			expect(error.cause).toBeInstanceOf(Error);
+			expect((error.cause as Error).message).toBe("interactive import failed");
+		} finally {
+			process.argv = originalArgv;
+			fs.rmSync(tempRoot, { recursive: true, force: true });
+		}
 	});
 
 	test("emit helpers no-op when no interactive mode has been activated", async () => {
