@@ -85,19 +85,6 @@ Current limitations:
 
 ```bash
 bun install
-bun run build
 bun run check
+bun run build
 ```
-
-Useful commands:
-- `bun run build` - bundle `src/index.ts` into `dist/` and emit type declarations
-- `bun run check` - run typecheck, knip, Biome, and the Bun test suite with coverage
-- `bun run check:ci` - CI validation: typecheck, knip, Biome CI mode, tests with LCOV, then build
-
-Key source files:
-- `src/index.ts` - extension entry point and pi registration
-- `src/cursor-oauth.ts` - Cursor OAuth login and token refresh
-- `src/cursor-models.ts` - fallback models and live model discovery
-- `src/cursor-provider.ts` - Cursor chat transport
-- `src/cursor-exec-bridge.ts` - Cursor exec dispatch and result mapping
-- `src/pi-native-tool-hack.ts` - best-effort native tool event bridge for pi UI integration
