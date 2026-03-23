@@ -1,5 +1,6 @@
 # pi-cursor-oauth
 
+[![CI](https://github.com/kenryu42/pi-cursor-oauth/actions/workflows/ci.yml/badge.svg)](https://github.com/kenryu42/pi-cursor-oauth/actions/workflows/ci.yml)
 [![Version](https://img.shields.io/github/v/tag/kenryu42/pi-cursor-oauth?label=version&color=blue)](https://github.com/kenryu42/pi-cursor-oauth)
 [![License: MIT](https://img.shields.io/badge/License-MIT-red.svg)](https://opensource.org/licenses/MIT)
 
