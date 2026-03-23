@@ -68,7 +68,7 @@ Bridge behavior notes:
 - Exec streams are explicitly closed after tool completion so Cursor does not remain stuck on `working...`
 - Unsupported interaction queries are answered immediately instead of being left pending
 - Cursor exec activity is best-effort mirrored into a small pi TUI widget instead of extra conversation messages
-- The pi TUI integration currently relies on a private internal-path/prototype patch into pi internals, so it is inherently brittle and may break across pi versions or non-Homebrew installs
+- The pi TUI integration currently relies on a private internal-module/prototype patch into pi internals, so it is inherently brittle and may break across pi versions or internal layout changes
 
 Current limitations:
 - Binary `write` via raw bytes is not supported
