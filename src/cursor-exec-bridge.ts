@@ -77,6 +77,7 @@ import {
 	ReadSuccessSchema,
 	RecordScreenFailureSchema,
 	RecordScreenResultSchema,
+	RequestContextEnvSchema,
 	RequestContextResultSchema,
 	RequestContextSchema,
 	RequestContextSuccessSchema,
@@ -275,7 +276,7 @@ export async function handleExecServerMessage(
 		if (execCase === "requestContextArgs") {
 			sendFinalExecClientMessage(
 				"requestContextResult",
-				buildRequestContextResult(),
+				buildRequestContextResult(activeBridge.cwd),
 			);
 			return;
 		}
@@ -1293,13 +1294,15 @@ function splitLines(text: string): string[] {
 	return text.replace(/\r\n/g, "\n").replace(/\r/g, "\n").split("\n");
 }
 
-function buildRequestContextResult() {
+function buildRequestContextResult(cwd: string) {
 	const capabilityRule = create(CursorRuleSchema, {
 		fullPath: ".cursor/rules/pi-cursor-oauth-exec-bridge.mdc",
 		content: [
 			"This session is using the pi-cursor-oauth exec bridge.",
 			"Supported native exec calls: read, ls, grep (content/files_with_matches/count), write for text content, delete, shell, shellStream, and requestContext.",
-			"Prefer grep for repository search over ad-hoc shell search when possible.",
+			"Use requestContext or ls to orient yourself before broad repository searches.",
+			"Use grep when searching file contents or when you already know the likely directory or file pattern.",
+			"When possible, use workspace-relative paths returned by tools.",
 			"Write only supports text writes. Do not attempt binary writes via fileBytes.",
 			"Unsupported exec capabilities include background shells, writeShellStdin, MCP resource operations, recordScreen, and computerUse.",
 			"If an unsupported capability is needed, fall back to supported read/ls/grep/shell workflows.",
@@ -1312,6 +1315,9 @@ function buildRequestContextResult() {
 
 	const requestContext = create(RequestContextSchema, {
 		rules: [capabilityRule],
+		env: create(RequestContextEnvSchema, {
+			workspacePaths: [cwd],
+		}),
 		repositoryInfo: [],
 		tools: [],
 		gitRepos: [],

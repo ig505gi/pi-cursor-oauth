@@ -270,10 +270,16 @@ describe("cursor-exec-bridge", () => {
 		expect(messages[0]?.message.value.message.case).toBe(
 			"requestContextResult",
 		);
-		expect(
-			messages[0]?.message.value.message.value.result.value.requestContext
-				.cloudRule,
-		).toContain("shellStream");
+		const requestContext =
+			messages[0]?.message.value.message.value.result.value.requestContext;
+		expect(requestContext.cloudRule).toContain("shellStream");
+		expect(requestContext.env?.workspacePaths).toEqual([cwd]);
+		expect(requestContext.rules[0]?.content).toContain(
+			"Use requestContext or ls to orient yourself before broad repository searches.",
+		);
+		expect(requestContext.rules[0]?.content).not.toContain(
+			"Prefer grep for repository search over ad-hoc shell search when possible.",
+		);
 
 		expect(messages[1]?.message.case).toBe("execClientControlMessage");
 		expect(messages[1]?.message.value.message.case).toBe("streamClose");
