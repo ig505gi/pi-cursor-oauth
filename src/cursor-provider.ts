@@ -43,17 +43,18 @@ import {
 	WebSearchRequestResponse_RejectedSchema,
 	WebSearchRequestResponseSchema,
 } from "./cursor-gen/agent_pb";
+import { CURSOR_DEFAULT_CLIENT_VERSION } from "./cursor-models";
 import {
 	type BlockState,
-	buildGrpcRequest,
 	handleConversationCheckpointUpdate,
 	parseConnectEndStream,
 	processInteractionUpdate,
 	type UsageState,
 } from "./cursor-provider-helpers";
+import { buildCursorGrpcRequest } from "./cursor-request-builder";
 
 export const CURSOR_API_URL = "https://api2.cursor.sh";
-export const CURSOR_CLIENT_VERSION = "cli-2026.01.09-231024f";
+export const CURSOR_CLIENT_VERSION = CURSOR_DEFAULT_CLIENT_VERSION;
 
 const CONNECT_END_STREAM_FLAG = 0b00000010;
 
@@ -111,7 +112,7 @@ export function streamCursorChat(
 				new Map<string, Uint8Array>();
 			conversationBlobStores.set(currentConversationId, blobStore);
 			const cachedState = conversationStateCache.get(currentConversationId);
-			const { requestBytes, conversationState } = buildGrpcRequest(
+			const { requestBytes, conversationState } = buildCursorGrpcRequest(
 				model,
 				context,
 				{
@@ -162,9 +163,7 @@ export function streamCursorChat(
 					currentThinkingBlock = block;
 				},
 				setFirstTokenTime: () => {
-					if (!firstTokenTime) {
-						firstTokenTime = Date.now();
-					}
+					if (!firstTokenTime) firstTokenTime = Date.now();
 				},
 			};
 
@@ -180,9 +179,7 @@ export function streamCursorChat(
 				while (pendingBuffer.length >= 5) {
 					const flags = pendingBuffer[0];
 					const msgLen = pendingBuffer.readUInt32BE(1);
-					if (pendingBuffer.length < 5 + msgLen) {
-						break;
-					}
+					if (pendingBuffer.length < 5 + msgLen) break;
 
 					const messageBytes = pendingBuffer.subarray(5, 5 + msgLen);
 					pendingBuffer = pendingBuffer.subarray(5 + msgLen);
@@ -222,9 +219,7 @@ export function streamCursorChat(
 			h2Request.write(frameConnectMessage(requestBytes));
 
 			const sendHeartbeat = () => {
-				if (!h2Request || h2Request.closed) {
-					return;
-				}
+				if (!h2Request || h2Request.closed) return;
 				const heartbeatMessage = create(AgentClientMessageSchema, {
 					message: {
 						case: "clientHeartbeat",
@@ -300,14 +295,11 @@ export function streamCursorChat(
 			stream.end();
 		} catch (error) {
 			output.stopReason = options?.signal?.aborted ? "aborted" : "error";
-			output.errorMessage =
-				error instanceof Error ? error.message : String(error);
+			output.errorMessage = error instanceof Error ? error.message : String(error);
 			stream.push({ type: "error", reason: output.stopReason, error: output });
 			stream.end();
 		} finally {
-			if (heartbeatTimer) {
-				clearInterval(heartbeatTimer);
-			}
+			if (heartbeatTimer) clearInterval(heartbeatTimer);
 			h2Request?.close();
 			h2Client?.close();
 		}
@@ -328,13 +320,7 @@ async function handleServerMessage(
 ): Promise<void> {
 	const msgCase = msg.message.case;
 	if (msgCase === "interactionUpdate") {
-		processInteractionUpdate(
-			msg.message.value,
-			output,
-			stream,
-			state,
-			usageState,
-		);
+		processInteractionUpdate(msg.message.value, output, stream, state, usageState);
 		return;
 	}
 	if (msgCase === "kvServerMessage") {
